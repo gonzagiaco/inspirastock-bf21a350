@@ -263,45 +263,6 @@ export type Database = {
           },
         ]
       }
-      my_stock_products: {
-        Row: {
-          code: string | null
-          created_at: string | null
-          id: string
-          name: string | null
-          price: number | null
-          product_id: string
-          quantity: number
-          stock_threshold: number
-          updated_at: string | null
-          user_id: string
-        }
-        Insert: {
-          code?: string | null
-          created_at?: string | null
-          id?: string
-          name?: string | null
-          price?: number | null
-          product_id: string
-          quantity?: number
-          stock_threshold?: number
-          updated_at?: string | null
-          user_id: string
-        }
-        Update: {
-          code?: string | null
-          created_at?: string | null
-          id?: string
-          name?: string | null
-          price?: number | null
-          product_id?: string
-          quantity?: number
-          stock_threshold?: number
-          updated_at?: string | null
-          user_id?: string
-        }
-        Relationships: []
-      }
       import_records: {
         Row: {
           created_at: string | null
@@ -582,22 +543,34 @@ export type Database = {
       }
       profiles: {
         Row: {
+          company_logo_url: string | null
+          company_name: string | null
           created_at: string | null
           full_name: string | null
           id: string
+          profile_onboarding_done: boolean
           updated_at: string | null
+          user_name: string | null
         }
         Insert: {
+          company_logo_url?: string | null
+          company_name?: string | null
           created_at?: string | null
           full_name?: string | null
           id: string
+          profile_onboarding_done?: boolean
           updated_at?: string | null
+          user_name?: string | null
         }
         Update: {
+          company_logo_url?: string | null
+          company_name?: string | null
           created_at?: string | null
           full_name?: string | null
           id?: string
+          profile_onboarding_done?: boolean
           updated_at?: string | null
+          user_name?: string | null
         }
         Relationships: []
       }
