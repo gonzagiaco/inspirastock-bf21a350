@@ -32,7 +32,7 @@ export function MyStockSupplierSection({
   onRemoveProduct,
   isMobile,
 }: MyStockSupplierSectionProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const totalProducts = lists.reduce((sum, list) => sum + list.products.length, 0);
 
@@ -41,13 +41,7 @@ export function MyStockSupplierSection({
       <CardHeader className="cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {supplierLogo && (
-              <img
-                src={supplierLogo}
-                alt={supplierName}
-                className="h-10 w-10 object-contain rounded"
-              />
-            )}
+            {supplierLogo && <img src={supplierLogo} alt={supplierName} className="h-10 w-10 object-contain rounded" />}
             <div>
               <h2 className="text-xl font-semibold">{supplierName}</h2>
               <p className="text-sm text-muted-foreground">
@@ -74,9 +68,7 @@ export function MyStockSupplierSection({
                         <h4 className="font-medium flex-1 truncate" title={list.listName}>
                           {list.listName}
                         </h4>
-                        <p className="text-sm text-muted-foreground">
-                          {list.products.length} productos
-                        </p>
+                        <p className="text-sm text-muted-foreground">{list.products.length} productos</p>
                       </div>
                     </div>
                   </div>
