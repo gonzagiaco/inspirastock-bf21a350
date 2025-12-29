@@ -122,9 +122,10 @@ export function PricesTab({ keys, map, setMap, setKeys, isSaving, isNumericColum
     setEditName("");
   };
 
-  // Get existing custom column names to exclude from base column selection
+  // Get existing custom column names
   const customColumnNames = Object.keys(map.custom_columns || {});
-  const availableBaseColumns = keys.filter((k) => isNumericColumn(k) && !customColumnNames.includes(k));
+  // Allow custom columns to be used as base for new columns (they are always numeric)
+  const availableBaseColumns = keys.filter((k) => isNumericColumn(k) || customColumnNames.includes(k));
 
   return (
     <div className="space-y-6">

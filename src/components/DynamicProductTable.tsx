@@ -141,6 +141,15 @@ export const DynamicProductTable = ({
 
   const visibilityState = columnVisibility[listId] || {};
 
+  // Helper para detectar columnas de descripción
+  const isDescriptionColumn = (key: string) => {
+    return key === 'name' || 
+           key === 'descripcion' ||
+           key.toLowerCase().includes('descripcion') ||
+           key.toLowerCase().includes('description') ||
+           mappingConfig?.name_keys?.includes(key);
+  };
+
   const columns = useMemo<ColumnDef<DynamicProduct>[]>(() => {
     const orderedSchema = currentOrder
       .map((key) => columnSchema.find((c) => c.key === key))
@@ -214,6 +223,14 @@ export const DynamicProductTable = ({
           return row.data[schema.key];
         },
         header: schema.label,
+        // Agregar sortingFn personalizado para columnas de descripción
+        sortingFn: isDescriptionColumn(schema.key)
+          ? (rowA, rowB, columnId) => {
+              const aValue = String(rowA.getValue(columnId) ?? '').replace(/\d+/g, '').trim().toLowerCase();
+              const bValue = String(rowB.getValue(columnId) ?? '').replace(/\d+/g, '').trim().toLowerCase();
+              return aValue.localeCompare(bValue, 'es', { numeric: false, sensitivity: 'base' });
+            }
+          : undefined,
         cell: ({ getValue, row }) => {
           const value = getValue();
           if (value === null || value === undefined) return "-";
