@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { formatARS, normalizeRawPrice } from "@/utils/numberParser";
 import { List, LayoutGrid, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -42,8 +42,16 @@ export function GlobalProductSearch({
 }: GlobalProductSearchProps) {
   const [viewMode, setViewMode] = useState(() => defaultViewMode);
   const { setCardPreviewFields, cardPreviewFields } = useProductListStore();
+  
+  // Estado local para sincronizar cambios de cantidad/in_my_stock
+  const [localResults, setLocalResults] = useState<any[]>([]);
 
-  const isMobile = useIsMobile()
+  const isMobile = useIsMobile();
+
+  // Sincronizar con globalResults cuando cambie
+  useEffect(() => {
+    setLocalResults(globalResults);
+  }, [globalResults]);
 
   useEffect(() => {
     const globalSearchId = "global-search-results";
@@ -51,6 +59,17 @@ export function GlobalProductSearch({
     if (!cardPreviewFields[globalSearchId]) {
       setCardPreviewFields(globalSearchId, ["code", "name", "price", "quantity", "supplier_name" /*, "list_name"*/]);
     }
+  }, []);
+
+  // Callback para actualizar estado local cuando cambia la cantidad
+  const handleLocalUpdate = useCallback((productId: string, newQty: number) => {
+    setLocalResults(prev => 
+      prev.map(p => 
+        p.product_id === productId 
+          ? { ...p, quantity: newQty, in_my_stock: newQty > 0 }
+          : p
+      )
+    );
   }, []);
 
   // Schema genérico para resultados de búsqueda global
@@ -112,7 +131,8 @@ export function GlobalProductSearch({
       }
     >();
 
-    globalResults.forEach((item: any) => {
+    // Usar localResults en lugar de globalResults
+    localResults.forEach((item: any) => {
       const listInfo = lists.find((l: any) => l.id === item.list_id);
       const supplierInfo = suppliers.find((s: any) => s.id === listInfo?.supplier_id);
 
@@ -149,7 +169,7 @@ export function GlobalProductSearch({
     });
 
     return Array.from(grouped.values());
-  }, [globalResults, lists, suppliers]);
+  }, [localResults, lists, suppliers]);
 
   // Estado: Proveedor seleccionado sin término de búsqueda
   if (isSupplierSelectedNoTerm) {
@@ -307,7 +327,7 @@ export function GlobalProductSearch({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {globalResults.map((item: any) => {
+              {localResults.map((item: any) => {
                 const listInfo = lists.find((l: any) => l.id === item.list_id);
                 const supplierInfo = suppliers.find((s: any) => s.id === listInfo?.supplier_id);
 
@@ -339,6 +359,7 @@ export function GlobalProductSearch({
                           productId={item.product_id}
                           listId={item.list_id}
                           value={item.quantity}
+                          onLocalUpdate={(newQty) => handleLocalUpdate(item.product_id, newQty)}
                           visibleSpan={false}
                         />
                       </div>

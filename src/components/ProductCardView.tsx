@@ -189,6 +189,14 @@ export function ProductCardView({
                           sortColumn.toLowerCase().includes('precio') ||
                           sortColumn.toLowerCase().includes('price');
     const isNumericColumn = columnConfig?.type === 'number' || isPriceColumn;
+    
+    // Detectar si es columna de descripción para ordenamiento alfabético puro
+    const isDescriptionColumn = 
+      sortColumn === 'name' || 
+      sortColumn === 'descripcion' ||
+      sortColumn.toLowerCase().includes('descripcion') ||
+      sortColumn.toLowerCase().includes('description') ||
+      mappingConfig?.name_keys?.includes(sortColumn);
 
     const sorted = [...products].sort((a, b) => {
       const aValue = getFieldValue(a, sortColumn);
@@ -198,6 +206,15 @@ export function ProductCardView({
       if (aValue == null && bValue == null) return 0;
       if (aValue == null) return 1;
       if (bValue == null) return -1;
+
+      // Ordenamiento ALFABETICO PURO para columnas de descripción (sin números)
+      if (isDescriptionColumn) {
+        const aText = String(aValue).replace(/\d+/g, '').trim().toLowerCase();
+        const bText = String(bValue).replace(/\d+/g, '').trim().toLowerCase();
+        return sortDirection === 'asc' 
+          ? aText.localeCompare(bText, 'es', { numeric: false, sensitivity: 'base' })
+          : bText.localeCompare(aText, 'es', { numeric: false, sensitivity: 'base' });
+      }
 
       // Solo intentar comparar como números si es una columna numérica
       if (isNumericColumn) {
