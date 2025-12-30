@@ -26,6 +26,34 @@ export interface DynamicProduct {
   calculated_data?: Record<string, number>; // Calculated prices with overrides
 }
 
+export interface CustomColumnFormula {
+  base_column: string;
+  percentage: number;
+  add_vat: boolean;
+  vat_rate?: number;
+}
+
+export interface MappingConfig {
+  code_keys: string[];
+  name_keys: string[];
+  quantity_key: string | null;
+  price_primary_key: string | null;
+  price_alt_keys: string[];
+  extra_index_keys: string[];
+  low_stock_threshold?: number;
+  cart_price_column?: string | null;
+  delivery_note_price_column?: string | null;
+  price_modifiers?: {
+    general: { percentage: number; add_vat: boolean; vat_rate?: number };
+    overrides: Record<string, { percentage: number; add_vat: boolean; vat_rate?: number }>;
+  };
+  dollar_conversion?: {
+    rate?: number;
+    target_columns: string[];
+  };
+  custom_columns?: Record<string, CustomColumnFormula>;
+}
+
 export interface ProductList {
   id: string;
   supplierId: string;
@@ -36,23 +64,7 @@ export interface ProductList {
   updatedAt: string;
   productCount: number;
   columnSchema: ColumnSchema[];
-  mapping_config?: {
-    code_keys: string[];
-    name_keys: string[];
-    quantity_key: string | null;
-    price_primary_key: string | null;
-    price_alt_keys: string[];
-    extra_index_keys: string[];
-    cart_price_column?: string | null;
-    price_modifiers?: {
-      general: { percentage: number; add_vat: boolean; vat_rate?: number };
-      overrides: Record<string, { percentage: number; add_vat: boolean; vat_rate?: number }>;
-    };
-    dollar_conversion?: {
-      rate: number; // Valor del dólar en pesos
-      target_columns: string[]; // Columnas donde aplicar
-    };
-  };
+  mapping_config?: MappingConfig;
 }
 
 export interface ProcessedDocument {

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { ProductList, DynamicProduct, ColumnSchema } from "@/types/productList";
+import { ProductList, DynamicProduct, ColumnSchema, MappingConfig } from "@/types/productList";
 import { fetchAllFromTable } from "@/utils/fetchAllProducts";
 import { useOnlineStatus } from "./useOnlineStatus";
 import {
@@ -92,9 +92,9 @@ export const useProductLists = (supplierId?: string) => {
           updatedAt: list.updated_at,
           productCount: list.product_count,
           columnSchema,
-          mapping_config: list.mapping_config || undefined,
+          mapping_config: (list.mapping_config as unknown as MappingConfig) || undefined,
         };
-      }) as ProductList[];
+      });
     },
     // Siempre habilitado: si supplierId está definido, filtra; si no, trae todas las listas
     enabled: true,
