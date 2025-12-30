@@ -101,6 +101,7 @@ export type Database = {
       }
       delivery_notes: {
         Row: {
+          client_id: string | null
           created_at: string | null
           customer_address: string | null
           customer_name: string
@@ -117,6 +118,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          client_id?: string | null
           created_at?: string | null
           customer_address?: string | null
           customer_name: string
@@ -133,6 +135,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          client_id?: string | null
           created_at?: string | null
           customer_address?: string | null
           customer_name?: string
@@ -148,7 +151,15 @@ export type Database = {
           updated_at?: string | null
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "delivery_notes_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       dynamic_products: {
         Row: {
