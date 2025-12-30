@@ -151,6 +151,49 @@ export const DynamicProductTable = ({
   };
 
   const columns = useMemo<ColumnDef<DynamicProduct>[]>(() => {
+    const resolveComputedValue = (row: DynamicProduct, targetKey: string, visited: Set<string>): any => {
+      if (visited.has(targetKey)) return null;
+      const nextVisited = new Set(visited);
+      nextVisited.add(targetKey);
+
+      // Precio principal configurado
+      if (mappingConfig?.price_primary_key && targetKey === mappingConfig.price_primary_key) {
+        return row.price;
+      }
+
+      // Calculated data (incluye columnas personalizadas ya materializadas por backend)
+      if (row.calculated_data && targetKey in row.calculated_data) {
+        return (row.calculated_data as any)[targetKey];
+      }
+
+      // Columna custom calculada (permite base_column que también sea custom)
+      const customFormula = mappingConfig?.custom_columns?.[targetKey];
+      if (customFormula?.base_column) {
+        const baseValue = resolveComputedValue(row, customFormula.base_column, nextVisited);
+        const baseNumeric = normalizeRawPrice(baseValue);
+        if (baseNumeric == null) return null;
+
+        const percentage = Number(customFormula.percentage ?? 0);
+        const addVat = Boolean(customFormula.add_vat);
+        const vatRate = Number(customFormula.vat_rate ?? 0);
+
+        let computed = baseNumeric * (1 + percentage / 100);
+        if (addVat) computed = computed * (1 + vatRate / 100);
+        return computed;
+      }
+
+      // Campos normalizados
+      if (targetKey === "code") return row.code;
+      if (targetKey === "name") return row.name;
+      if (targetKey === "price") return row.price;
+      if (targetKey === "quantity") return row.quantity;
+      if (targetKey === "stock_threshold") return row.stock_threshold;
+      if (targetKey === "precio") return row.price;
+      if (targetKey === "descripcion") return row.name;
+
+      return (row as any).data?.[targetKey];
+    };
+
     const orderedSchema = currentOrder
       .map((key) => columnSchema.find((c) => c.key === key))
       .filter(Boolean) as ColumnSchema[];
@@ -168,7 +211,7 @@ export const DynamicProductTable = ({
             const quantity = row.original.quantity || 0;
             const stockThreshold = row.original.stock_threshold ?? 0;
             const isLowStock =
-              row.original.in_my_stock === true &&
+              Boolean(row.original.in_my_stock) &&
               stockThreshold > 0 &&
               quantity < stockThreshold;
 
@@ -185,7 +228,7 @@ export const DynamicProductTable = ({
                   value={row.original.quantity}
                   onLocalUpdate={(newQty) => {
                     row.original.quantity = newQty;
-                    row.original.in_my_stock = newQty > 0;
+                    row.original.in_my_stock = true;
                   }}
                   visibleSpan={false}
                 />
@@ -220,17 +263,52 @@ export const DynamicProductTable = ({
           if (schema.key === "descripcion") return row.name;
 
           // CUARTO: Para columnas custom sin mapeo especial, leer de data original
-          return row.data[schema.key];
+          return resolveComputedValue(row, schema.key, new Set());
         },
         header: schema.label,
         // Agregar sortingFn personalizado para columnas de descripción
-        sortingFn: isDescriptionColumn(schema.key)
-          ? (rowA, rowB, columnId) => {
-              const aValue = String(rowA.getValue(columnId) ?? '').replace(/\d+/g, '').trim().toLowerCase();
-              const bValue = String(rowB.getValue(columnId) ?? '').replace(/\d+/g, '').trim().toLowerCase();
-              return aValue.localeCompare(bValue, 'es', { numeric: false, sensitivity: 'base' });
-            }
-          : undefined,
+        sortingFn: (() => {
+          const lowerKey = schema.key.toLowerCase();
+          const priceKeys = [
+            "price",
+            "precio",
+            mappingConfig?.price_primary_key?.toLowerCase(),
+            ...(mappingConfig?.price_alt_keys?.map((k) => k.toLowerCase()) || []),
+            mappingConfig?.cart_price_column?.toLowerCase(),
+          ].filter(Boolean);
+
+          const isPriceField = priceKeys.includes(lowerKey) || lowerKey.includes("precio") || lowerKey.includes("price");
+          const isNumericField = schema.type === "number" || isPriceField;
+
+          if (isDescriptionColumn(schema.key)) {
+            return (rowA: any, rowB: any, columnId: string) => {
+              const aValue = String(rowA.getValue(columnId) ?? "").trim().toLowerCase();
+              const bValue = String(rowB.getValue(columnId) ?? "").trim().toLowerCase();
+              return aValue.localeCompare(bValue, "es", { numeric: false, sensitivity: "base" });
+            };
+          }
+
+          if (isNumericField) {
+            return (rowA: any, rowB: any, columnId: string) => {
+              const aRaw = rowA.getValue(columnId);
+              const bRaw = rowB.getValue(columnId);
+
+              const aNum = normalizeRawPrice(aRaw);
+              const bNum = normalizeRawPrice(bRaw);
+
+              if (aNum == null && bNum == null) return 0;
+              if (aNum == null) return 1;
+              if (bNum == null) return -1;
+              return aNum - bNum;
+            };
+          }
+
+          return (rowA: any, rowB: any, columnId: string) => {
+            const aValue = String(rowA.getValue(columnId) ?? "").trim().toLowerCase();
+            const bValue = String(rowB.getValue(columnId) ?? "").trim().toLowerCase();
+            return aValue.localeCompare(bValue, "es", { numeric: true, sensitivity: "base" });
+          };
+        })(),
         cell: ({ getValue, row }) => {
           const value = getValue();
           if (value === null || value === undefined) return "-";

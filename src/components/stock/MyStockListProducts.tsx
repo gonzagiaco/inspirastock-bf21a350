@@ -63,6 +63,16 @@ export function MyStockListProducts({
   const queryClient = useQueryClient();
   const debouncedFilter = useDebounce(localFilter, 200);
 
+  const isDescriptionColumn = (key: string): boolean => {
+    return (
+      key === "name" ||
+      key === "descripcion" ||
+      key.toLowerCase().includes("descripcion") ||
+      key.toLowerCase().includes("description") ||
+      mappingConfig?.name_keys?.includes(key)
+    );
+  };
+
   // Default view mode
   const defaultViewMode = isMobile ? "cards" : "table";
   const currentViewMode = storeViewMode[listId] || defaultViewMode;
@@ -154,6 +164,45 @@ export function MyStockListProducts({
 
   // Build columns for TanStack Table
   const columns = useMemo<ColumnDef<any>[]>(() => {
+    const resolveComputedValue = (row: any, targetKey: string, visited: Set<string>): any => {
+      if (visited.has(targetKey)) return null;
+      const nextVisited = new Set(visited);
+      nextVisited.add(targetKey);
+
+      // Precio principal configurado
+      if (mappingConfig?.price_primary_key && targetKey === mappingConfig.price_primary_key) {
+        return row.price;
+      }
+
+      // Calculated data (incluye columnas personalizadas ya materializadas por backend)
+      if (row.calculated_data && targetKey in row.calculated_data) {
+        return row.calculated_data[targetKey];
+      }
+
+      // Columna custom calculada (permite base_column que también sea custom)
+      const customFormula = mappingConfig?.custom_columns?.[targetKey];
+      if (customFormula?.base_column) {
+        const baseValue = resolveComputedValue(row, customFormula.base_column, nextVisited);
+        const baseNumeric = normalizeRawPrice(baseValue);
+        if (baseNumeric == null) return null;
+
+        const percentage = Number(customFormula.percentage ?? 0);
+        const addVat = Boolean(customFormula.add_vat);
+        const vatRate = Number(customFormula.vat_rate ?? 0);
+
+        let computed = baseNumeric * (1 + percentage / 100);
+        if (addVat) computed = computed * (1 + vatRate / 100);
+        return computed;
+      }
+
+      // Standard mappings
+      if (targetKey === "code") return row.code;
+      if (targetKey === "name") return row.name;
+      if (targetKey === "price") return row.price;
+
+      return row.data?.[targetKey];
+    };
+
     const orderedSchema = currentOrder
       .map((key) => processedSchema.find((c) => c.key === key))
       .filter(Boolean) as ColumnSchema[];
@@ -263,9 +312,16 @@ export function MyStockListProducts({
           if (schema.key === "name") return row.name;
           if (schema.key === "price") return row.price;
           // Custom columns from data
-          return row.data?.[schema.key];
+          return resolveComputedValue(row, schema.key, new Set());
         },
         header: schema.label,
+        sortingFn: isDescriptionColumn(schema.key)
+          ? (rowA: any, rowB: any, columnId: string) => {
+              const aValue = String(rowA.getValue(columnId) ?? "").trim().toLowerCase();
+              const bValue = String(rowB.getValue(columnId) ?? "").trim().toLowerCase();
+              return aValue.localeCompare(bValue, "es", { numeric: false, sensitivity: "base" });
+            }
+          : undefined,
         cell: ({ getValue }: any) => {
           const value = getValue();
           if (value === null || value === undefined) return "-";

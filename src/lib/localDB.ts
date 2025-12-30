@@ -2103,15 +2103,10 @@ export async function updateProductQuantityOffline(
   }
 
   const myStockEntry = await localDB.my_stock_products.where({ user_id: user.id, product_id: productId }).first();
-  const shouldBeInMyStock = newQuantity > 0;
 
-  if (myStockEntry && !shouldBeInMyStock) {
-    await localDB.my_stock_products.delete(myStockEntry.id);
-
-    if (enqueue) {
-      await queueOperation("my_stock_products", "DELETE", myStockEntry.id, {});
-    }
-  } else if (myStockEntry) {
+  // La pertenencia a "Mi Stock" NO depende del quantity: una vez que el producto entra, puede tener 0.
+  // Si el usuario modifica el stock desde el input, asumimos que el producto debe existir en my_stock_products.
+  if (myStockEntry) {
     await localDB.my_stock_products.update(myStockEntry.id, {
       quantity: newQuantity,
       updated_at: now,
@@ -2123,7 +2118,7 @@ export async function updateProductQuantityOffline(
         updated_at: now,
       });
     }
-  } else if (shouldBeInMyStock) {
+  } else {
     const newEntry: MyStockProductDB = {
       id: isOnline() ? crypto.randomUUID() : generateTempId(),
       user_id: user.id,

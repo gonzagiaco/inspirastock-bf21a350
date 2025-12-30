@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ShoppingCart, Package, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -60,8 +60,12 @@ export function AddProductDropdown({
     }
   };
 
-  const isInMyStock = product.in_my_stock === true;
+  const isInMyStock = Boolean(product.in_my_stock);
   const shouldDisableAddToStock = isInMyStock || hasBeenAddedToStock;
+
+  useEffect(() => {
+    if (!isInMyStock) setHasBeenAddedToStock(false);
+  }, [isInMyStock]);
 
   // Página Mi Stock: mostrar botones para agregar al pedido y quitar del stock
   if (showRemoveFromStock) {

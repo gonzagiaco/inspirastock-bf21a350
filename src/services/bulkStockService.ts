@@ -87,9 +87,10 @@ export async function bulkAdjustStock(adjustments: StockAdjustment[], isOnline: 
         success: result.success,
       });
 
-      // Sincronizar resultados a IndexedDB
+      // Sincronizar resultados a IndexedDB (+ my_stock_products remoto)
       if (result.results) {
         await syncBulkResultsToLocal(result.results);
+        await syncBulkResultsToRemoteMyStock(result.results);
       }
 
       return result;
@@ -107,6 +108,56 @@ export async function bulkAdjustStock(adjustments: StockAdjustment[], isOnline: 
  * Versión offline de bulk adjust
  * Actualiza IndexedDB y encola operaciones
  */
+async function syncBulkResultsToRemoteMyStock(results: BulkAdjustResult["results"]): Promise<void> {
+  if (!results.length) return;
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+
+  const productIds = Array.from(new Set(results.map((r) => r.product_id).filter(Boolean)));
+  if (!productIds.length) return;
+
+  const { data: existingRows, error } = await supabase
+    .from("my_stock_products")
+    .select("id, product_id")
+    .eq("user_id", user.id)
+    .in("product_id", productIds);
+
+  if (error) {
+    logBulk("ERROR syncing my_stock_products (select)", error);
+    return;
+  }
+
+  const nextQtyByProductId = new Map(results.map((r) => [r.product_id, r.new_qty]));
+  const now = new Date().toISOString();
+
+  const rowsToUpsert = (existingRows ?? [])
+    .map((row: any) => {
+      const nextQty = nextQtyByProductId.get(row.product_id);
+      if (typeof nextQty !== "number") return null;
+      return {
+        id: row.id,
+        user_id: user.id,
+        product_id: row.product_id,
+        quantity: nextQty,
+        updated_at: now,
+      };
+    })
+    .filter(Boolean);
+
+  if (!rowsToUpsert.length) return;
+
+  const { error: upsertError } = await supabase.from("my_stock_products").upsert(rowsToUpsert as any[], {
+    onConflict: "id",
+  });
+
+  if (upsertError) {
+    logBulk("ERROR syncing my_stock_products (upsert)", upsertError);
+  }
+}
+
 async function bulkAdjustStockOffline(adjustments: StockAdjustment[]): Promise<BulkAdjustResult> {
   const startTime = performance.now();
   logBulk("Starting offline bulk adjustment", { count: adjustments.length });

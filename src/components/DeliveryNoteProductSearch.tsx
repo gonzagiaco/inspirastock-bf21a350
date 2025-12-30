@@ -119,6 +119,83 @@ const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
         }
       }
 
+      // 3.5 Fallback: si la columna es custom, calcularla (permite base_column custom)
+      if (resolvedPrice == null && mappingConfig?.custom_columns?.[priceCol]) {
+        const resolveCustomColumnPrice = async (columnKey: string, depth = 0): Promise<number | null> => {
+          if (depth > 8) return null;
+          const customFormula = mappingConfig?.custom_columns?.[columnKey];
+          if (!customFormula?.base_column) return null;
+
+          const baseKey = customFormula.base_column;
+
+          const fromKnown =
+            baseKey === "price"
+              ? parsePriceValue(product.price)
+              : baseKey === "quantity"
+                ? parsePriceValue(product.quantity)
+                : null;
+          const fromRpcCalculated =
+            product.calculated_data?.[baseKey] != null ? parsePriceValue(product.calculated_data[baseKey]) : null;
+          const fromRpcRaw =
+            product.dynamic_products?.data?.[baseKey] != null
+              ? parsePriceValue(product.dynamic_products.data[baseKey])
+              : product.data?.[baseKey] != null
+                ? parsePriceValue(product.data[baseKey])
+                : null;
+
+          let fromIndexedCalc: number | null = null;
+          let fromLocalDynamic: number | null = null;
+          if (product.product_id) {
+            const indexRecord = await localDB.dynamic_products_index.where('product_id').equals(product.product_id).first();
+            if (indexRecord?.calculated_data?.[baseKey] != null) {
+              fromIndexedCalc = parsePriceValue(indexRecord.calculated_data[baseKey]);
+            }
+            const localProduct = await localDB.dynamic_products.get(product.product_id);
+            if (localProduct?.data?.[baseKey] != null) {
+              fromLocalDynamic = parsePriceValue(localProduct.data[baseKey]);
+            }
+          }
+
+          let fromRemote: number | null = null;
+          if (
+            fromKnown == null &&
+            fromRpcCalculated == null &&
+            fromRpcRaw == null &&
+            fromIndexedCalc == null &&
+            fromLocalDynamic == null &&
+            isOnline &&
+            product.product_id
+          ) {
+            const { data: remoteProduct, error } = await supabase
+              .from("dynamic_products")
+              .select("data")
+              .eq("id", product.product_id)
+              .maybeSingle();
+            if (!error && remoteProduct?.data?.[baseKey] != null) {
+              fromRemote = parsePriceValue(remoteProduct.data[baseKey]);
+            }
+          }
+
+          const fromNestedCustom = await resolveCustomColumnPrice(baseKey, depth + 1);
+          const base =
+            fromKnown ?? fromRpcCalculated ?? fromRpcRaw ?? fromIndexedCalc ?? fromLocalDynamic ?? fromRemote ?? fromNestedCustom;
+          if (base == null) return null;
+
+          const percentage = Number(customFormula.percentage ?? 0);
+          const addVat = Boolean(customFormula.add_vat);
+          const vatRate = Number(customFormula.vat_rate ?? 0);
+
+          let computed = base * (1 + percentage / 100);
+          if (addVat) computed = computed * (1 + vatRate / 100);
+          return computed;
+        };
+
+        resolvedPrice = await resolveCustomColumnPrice(priceCol);
+        if (resolvedPrice != null) {
+          console.log('ƒo. DeliveryNote - Precio calculado desde custom_columns:', resolvedPrice);
+        }
+      }
+
       // 4. Fallback final: buscar en dynamic_products local
       if (resolvedPrice == null && product.product_id) {
         const localProduct = await localDB.dynamic_products.get(product.product_id);

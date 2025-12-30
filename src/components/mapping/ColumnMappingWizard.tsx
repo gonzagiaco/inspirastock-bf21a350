@@ -106,6 +106,7 @@ export function ColumnMappingWizard({ listId, onSaved }: Props) {
     }
   };
   const [sample, setSample] = useState<any[]>([]);
+  const [columnSchema, setColumnSchema] = useState<any[]>([]);
   const [keys, setKeys] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -128,6 +129,9 @@ export function ColumnMappingWizard({ listId, onSaved }: Props) {
   });
 
   const isNumericColumn = (columnKey: string): boolean => {
+    const schemaType = columnSchema.find((col) => col?.key === columnKey)?.type;
+    if (schemaType === "number") return true;
+
     // Verificar si al menos el 50% de las muestras contienen valores numéricos
     const numericCount = sample.filter((row) => {
       const value = row.data?.[columnKey];
@@ -158,7 +162,7 @@ export function ColumnMappingWizard({ listId, onSaved }: Props) {
       try {
         const [{ data: sampleData, error: sampleError }, { data: configData, error: configError }] = await Promise.all([
           supabase.from("dynamic_products").select("data").eq("list_id", listId).limit(20),
-          supabase.from("product_lists").select("mapping_config").eq("id", listId).single(),
+          supabase.from("product_lists").select("mapping_config, column_schema").eq("id", listId).single(),
         ]);
 
         if (sampleError) throw sampleError;
@@ -168,6 +172,11 @@ export function ColumnMappingWizard({ listId, onSaved }: Props) {
         setSample(sampleData ?? []);
         const k = new Set<string>();
         (sampleData ?? []).forEach((row) => Object.keys(row.data || {}).forEach((kk) => k.add(kk)));
+        const schema = (configData?.column_schema as any[]) ?? [];
+        setColumnSchema(schema);
+        schema.forEach((col) => {
+          if (col?.key) k.add(col.key);
+        });
         setKeys(Array.from(k).sort());
 
         if (configData?.mapping_config) {

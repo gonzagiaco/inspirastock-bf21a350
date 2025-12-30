@@ -79,6 +79,7 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
   const { data: officialDollar, isLoading: loadingDollar } = useOfficialDollar();
 
   const [sample, setSample] = useState<any[]>([]);
+  const [columnSchema, setColumnSchema] = useState<ColumnSchema[]>([]);
   const [keys, setKeys] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -102,6 +103,9 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
   });
 
   const isNumericColumn = (columnKey: string): boolean => {
+    const schemaType = columnSchema.find((col) => col.key === columnKey)?.type;
+    if (schemaType === "number") return true;
+
     const numericCount = sample.filter((row) => {
       const value = row.data?.[columnKey];
       if (value == null) return false;
@@ -126,7 +130,7 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
       try {
         const [{ data: sampleData, error: sampleError }, { data: configData, error: configError }] = await Promise.all([
           supabase.from("dynamic_products").select("data").eq("list_id", listId).limit(20),
-          supabase.from("product_lists").select("mapping_config").eq("id", listId).single(),
+          supabase.from("product_lists").select("mapping_config, column_schema").eq("id", listId).single(),
         ]);
 
         if (sampleError) throw sampleError;
@@ -134,8 +138,12 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
         if (isCancelled) return;
 
         setSample(sampleData ?? []);
+        setColumnSchema((configData?.column_schema as ColumnSchema[]) ?? []);
         const k = new Set<string>();
         (sampleData ?? []).forEach((row) => Object.keys(row.data || {}).forEach((kk) => k.add(kk)));
+        ((configData?.column_schema as ColumnSchema[]) ?? []).forEach((col) => {
+          if (col?.key) k.add(col.key);
+        });
 
         if (configData?.mapping_config) {
           const loaded = configData.mapping_config as MappingConfig;

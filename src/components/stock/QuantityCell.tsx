@@ -61,35 +61,26 @@ export const QuantityCell: React.FC<Props> = ({
           } = await supabase.auth.getUser();
 
           if (user) {
-            if (newQty > 0) {
-              const indexRecord = await localDB.dynamic_products_index
-                .where({ product_id: productId, list_id: listId })
-                .first();
-              const stockThreshold = indexRecord?.stock_threshold ?? 0;
+            const indexRecord = await localDB.dynamic_products_index
+              .where({ product_id: productId, list_id: listId })
+              .first();
+            const stockThreshold = indexRecord?.stock_threshold ?? 0;
 
-              const { error: myStockError } = await supabase
-                .from("my_stock_products")
-                .upsert(
-                  {
-                    user_id: user.id,
-                    product_id: productId,
-                    quantity: newQty,
-                    stock_threshold: stockThreshold,
-                    updated_at: now,
-                  },
-                  { onConflict: "user_id,product_id" },
-                );
+            const { error: myStockError } = await supabase
+              .from("my_stock_products")
+              .upsert(
+                {
+                  user_id: user.id,
+                  product_id: productId,
+                  quantity: newQty,
+                  stock_threshold: stockThreshold,
+                  created_at: now,
+                  updated_at: now,
+                },
+                { onConflict: "user_id,product_id" },
+              );
 
-              if (myStockError) throw myStockError;
-            } else {
-              const { error: myStockError } = await supabase
-                .from("my_stock_products")
-                .delete()
-                .eq("user_id", user.id)
-                .eq("product_id", productId);
-
-              if (myStockError) throw myStockError;
-            }
+            if (myStockError) throw myStockError;
           }
         }
 

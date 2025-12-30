@@ -18,6 +18,7 @@ import { QuantityCell } from "@/components/stock/QuantityCell";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { getOfflineData } from "@/lib/localDB";
 import { GlobalProductSearch } from "@/components/GlobalProductsSearch";
+import { useMyStockProducts } from "@/hooks/useMyStockProducts";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 // Helper function to extract name from product data for search results
@@ -155,6 +156,39 @@ export default function Stock() {
       let finalPrice = parsePriceValue(product.price) ?? 0;
       const cartPriceColumn = mappingConfig?.cart_price_column;
       if (cartPriceColumn) {
+        const resolveCustomColumnPrice = (columnKey: string, depth = 0): number | null => {
+          if (depth > 8) return null;
+          const customFormula = mappingConfig?.custom_columns?.[columnKey];
+          if (!customFormula?.base_column) return null;
+
+          const baseKey = customFormula.base_column;
+
+          const baseFromKnown =
+            baseKey === "price"
+              ? parsePriceValue(product.price)
+              : baseKey === "quantity"
+                ? parsePriceValue(product.quantity)
+                : null;
+          const baseFromCalculated =
+            product.calculated_data && baseKey in product.calculated_data
+              ? parsePriceValue(product.calculated_data[baseKey])
+              : null;
+          const baseFromRaw =
+            product.data && baseKey in product.data ? parsePriceValue(product.data[baseKey]) : null;
+          const baseFromNestedCustom = resolveCustomColumnPrice(baseKey, depth + 1);
+
+          const base = baseFromKnown ?? baseFromCalculated ?? baseFromRaw ?? baseFromNestedCustom;
+          if (base == null) return null;
+
+          const percentage = Number(customFormula.percentage ?? 0);
+          const addVat = Boolean(customFormula.add_vat);
+          const vatRate = Number(customFormula.vat_rate ?? 0);
+
+          let computed = base * (1 + percentage / 100);
+          if (addVat) computed = computed * (1 + vatRate / 100);
+          return computed;
+        };
+
         const fromCalculated =
           product.calculated_data && cartPriceColumn in product.calculated_data
             ? parsePriceValue(product.calculated_data[cartPriceColumn])
@@ -163,8 +197,10 @@ export default function Stock() {
           !fromCalculated && product.data && cartPriceColumn in product.data
             ? parsePriceValue(product.data[cartPriceColumn])
             : null;
+        const fromCustom = fromCalculated == null && fromRawData == null ? resolveCustomColumnPrice(cartPriceColumn) : null;
         if (fromCalculated != null) finalPrice = fromCalculated;
         else if (fromRawData != null) finalPrice = fromRawData;
+        else if (fromCustom != null) finalPrice = fromCustom;
       }
 
       const newRequest: RequestItem = {
@@ -226,7 +262,14 @@ export default function Stock() {
         const indexedProducts = (await getOfflineData("dynamic_products_index")) as any[];
         const fullProducts = (await getOfflineData("dynamic_products")) as any[];
         const productLists = (await getOfflineData("product_lists")) as any[];
+        const myStockRows = (await getOfflineData("my_stock_products")) as any[];
         const searchTermLower = searchTerm.trim().toLowerCase();
+
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        const myStockForUser = user ? myStockRows.filter((r) => r.user_id === user.id) : [];
+        const myStockByProductId = new Map<string, any>(myStockForUser.map((r) => [r.product_id, r]));
 
         // Filtrar por término de búsqueda
         let filtered = indexedProducts.filter((p: any) => {
@@ -288,6 +331,17 @@ export default function Stock() {
           return p;
         });
 
+        // Enriquecer con pertenencia a Mi Stock (independiente del quantity)
+        filtered = filtered.map((p: any) => {
+          const myStock = myStockByProductId.get(p.product_id);
+          return {
+            ...p,
+            in_my_stock: Boolean(myStock),
+            quantity: myStock?.quantity ?? p.quantity,
+            stock_threshold: myStock?.stock_threshold ?? p.stock_threshold,
+          };
+        });
+
         const total = filtered.length;
         const from = pageParam * PAGE_SIZE;
         const to = from + PAGE_SIZE;
@@ -328,6 +382,18 @@ export default function Stock() {
     if (!globalSearchData?.pages) return [];
     return globalSearchData.pages.flatMap((page) => page.data || []);
   }, [globalSearchData]);
+
+  const { data: myStockProducts } = useMyStockProducts();
+  const myStockByProductId = useMemo(() => {
+    return new Set<string>((myStockProducts ?? []).map((p: any) => p.product_id).filter(Boolean));
+  }, [myStockProducts]);
+
+  const globalResultsEnriched = useMemo(() => {
+    return globalResults.map((item: any) => ({
+      ...item,
+      in_my_stock: myStockByProductId.has(item.product_id) || Boolean(item.in_my_stock),
+    }));
+  }, [globalResults, myStockByProductId]);
 
   return (
     <div className="min-h-screen w-full bg-background overflow-x-hidden">
@@ -412,7 +478,7 @@ export default function Stock() {
           ) : searchTerm.trim().length >= 1 || (searchTerm === "" && supplierFilter !== "all") ? (
             <GlobalProductSearch
               searchTerm={searchTerm}
-              globalResults={globalResults}
+              globalResults={globalResultsEnriched}
               loadingSearch={loadingSearch}
               isSupplierSelectedNoTerm={isSupplierSelectedNoTerm}
               isOnline={isOnline}

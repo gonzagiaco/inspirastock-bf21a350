@@ -41,6 +41,8 @@ interface ProductCardViewProps {
 
 type SortDirection = 'asc' | 'desc' | null;
 
+const customColumnCalcGuard = new Set<string>();
+
 export function ProductCardView({
   listId,
   products,
@@ -63,6 +65,7 @@ export function ProductCardView({
 }: ProductCardViewProps) {
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
   const [displayCount, setDisplayCount] = useState(10);
+  const [localProducts, setLocalProducts] = useState(() => products);
   const { cardPreviewFields } = useProductListStore();
 
   // Ocultar la opción de "Agregar a mi stock" cuando estamos en la ruta /mi-stock
@@ -91,6 +94,10 @@ export function ProductCardView({
     setDisplayCount(10);
   }, [products.length]);
 
+  useEffect(() => {
+    setLocalProducts(products);
+  }, [products]);
+
   const toggleCard = (productId: string) => {
     const newExpanded = new Set(expandedCards);
     if (newExpanded.has(productId)) {
@@ -112,6 +119,30 @@ export function ProductCardView({
     // 2) Override específico para esta columna
     if (product.calculated_data && key in product.calculated_data) {
       return product.calculated_data[key];
+    }
+
+    // 2.5) Columna custom calculada (permite que base_column también sea custom)
+    const customFormula = effectiveMappingConfig?.custom_columns?.[key];
+    if (customFormula?.base_column) {
+      const guardKey = `${String(product?.id ?? "")}:${key}`;
+      if (customColumnCalcGuard.has(guardKey)) return null;
+      customColumnCalcGuard.add(guardKey);
+
+      try {
+        const baseValue = getFieldValue(product, customFormula.base_column);
+        const baseNumeric = normalizeRawPrice(baseValue);
+        if (baseNumeric == null) return null;
+
+        const percentage = Number(customFormula.percentage ?? 0);
+        const addVat = Boolean(customFormula.add_vat);
+        const vatRate = Number(customFormula.vat_rate ?? 0);
+
+        let computed = baseNumeric * (1 + percentage / 100);
+        if (addVat) computed = computed * (1 + vatRate / 100);
+        return computed;
+      } finally {
+        customColumnCalcGuard.delete(guardKey);
+      }
     }
 
     // 3) Campos normalizados
@@ -178,7 +209,7 @@ export function ProductCardView({
   // Aplicar ordenamiento a los productos
   const sortedProducts = useMemo(() => {
     if (!sortColumn || !sortDirection) {
-      return products;
+      return localProducts;
     }
 
     // Determinar si la columna es de precio para aplicar ordenamiento numérico
@@ -198,7 +229,7 @@ export function ProductCardView({
       sortColumn.toLowerCase().includes('description') ||
       mappingConfig?.name_keys?.includes(sortColumn);
 
-    const sorted = [...products].sort((a, b) => {
+    const sorted = [...localProducts].sort((a, b) => {
       const aValue = getFieldValue(a, sortColumn);
       const bValue = getFieldValue(b, sortColumn);
 
@@ -209,8 +240,8 @@ export function ProductCardView({
 
       // Ordenamiento ALFABETICO PURO para columnas de descripción (sin números)
       if (isDescriptionColumn) {
-        const aText = String(aValue).replace(/\d+/g, '').trim().toLowerCase();
-        const bText = String(bValue).replace(/\d+/g, '').trim().toLowerCase();
+        const aText = String(aValue).trim().toLowerCase();
+        const bText = String(bValue).trim().toLowerCase();
         return sortDirection === 'asc' 
           ? aText.localeCompare(bText, 'es', { numeric: false, sensitivity: 'base' })
           : bText.localeCompare(aText, 'es', { numeric: false, sensitivity: 'base' });
@@ -227,16 +258,15 @@ export function ProductCardView({
       }
 
       // Comparar como strings (orden alfanumérico natural)
-      const aStr = String(aValue).toLowerCase();
-      const bStr = String(bValue).toLowerCase();
+      const aStr = String(aValue).trim().toLowerCase();
+      const bStr = String(bValue).trim().toLowerCase();
 
-      if (aStr < bStr) return sortDirection === 'asc' ? -1 : 1;
-      if (aStr > bStr) return sortDirection === 'asc' ? 1 : -1;
-      return 0;
+      const cmp = aStr.localeCompare(bStr, "es", { numeric: true, sensitivity: "base" });
+      return sortDirection === "asc" ? cmp : -cmp;
     });
 
     return sorted;
-  }, [products, sortColumn, sortDirection, columnSchema, mappingConfig]);
+  }, [localProducts, sortColumn, sortDirection, columnSchema, mappingConfig]);
 
   // Campos que se muestran arriba (según configuración del usuario)
   const keyFields = previewFieldKeys
@@ -351,8 +381,7 @@ export function ProductCardView({
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {visibleProducts.map((product) => {
           const isExpanded = expandedCards.has(product.id);
-          const inMyStockCard =
-            product.in_my_stock === true;
+          const inMyStockCard = Boolean(product.in_my_stock);
 
           const isLowStockCard =
             showLowStockBadge &&
@@ -379,8 +408,7 @@ export function ProductCardView({
                       const quantityField = field;
                       const q = product.quantity || 0;
                       const stockThresholdField = product.stock_threshold ?? 0;
-                      const inMyStock =
-                        product.in_my_stock === true;
+          const inMyStock = Boolean(product.in_my_stock);
 
                       const isLowStockField =
                         showLowStockBadge &&
@@ -440,8 +468,11 @@ export function ProductCardView({
                               listId={product.listId ?? listId}
                               value={product.quantity}
                               onLocalUpdate={(newQty) => {
-                                product.quantity = newQty;
-                                product.in_my_stock = newQty > 0;
+                                setLocalProducts((prev) =>
+                                  prev.map((p: any) =>
+                                    p?.id === product.id ? { ...p, quantity: newQty, in_my_stock: true } : p,
+                                  ),
+                                );
                               }}
                               suppressToasts={suppressStockToasts}
                               visibleSpan={true}
@@ -468,7 +499,11 @@ export function ProductCardView({
                               onThresholdChange?.(product.id, newThreshold)
                             }
                             onLocalUpdate={(newThreshold) => {
-                              product.stock_threshold = newThreshold;
+                              setLocalProducts((prev) =>
+                                prev.map((p: any) =>
+                                  p?.id === product.id ? { ...p, stock_threshold: newThreshold } : p,
+                                ),
+                              );
                             }}
                             suppressToasts={suppressStockToasts}
                           />

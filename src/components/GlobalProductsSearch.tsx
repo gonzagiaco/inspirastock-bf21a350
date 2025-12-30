@@ -66,7 +66,7 @@ export function GlobalProductSearch({
     setLocalResults(prev => 
       prev.map(p => 
         p.product_id === productId 
-          ? { ...p, quantity: newQty, in_my_stock: newQty > 0 }
+          ? { ...p, quantity: newQty, in_my_stock: true }
           : p
       )
     );
@@ -151,14 +151,14 @@ export function GlobalProductSearch({
         });
       }
 
-      grouped.get(item.list_id)!.products.push({
-        id: item.product_id,
-        listId: item.list_id,
-        code: item.code || "-",
-        name: item.name || "-",
-        price: Number(item.price) || 0,
-        quantity: item.quantity || 0,
-        in_my_stock: item.in_my_stock === true,
+        grouped.get(item.list_id)!.products.push({
+          id: item.product_id,
+          listId: item.list_id,
+          code: item.code || "-",
+          name: item.name || "-",
+          price: Number(item.price) || 0,
+          quantity: item.quantity || 0,
+        in_my_stock: Boolean(item.in_my_stock),
         supplierId: supplierInfo?.id || "",
         supplierName: supplierInfo?.name || "-",
         listName: listInfo.name,
@@ -342,7 +342,7 @@ export function GlobalProductSearch({
                           name: item.name,
                           price: Number(item.price) || 0,
                           quantity: item.quantity || 0,
-                          in_my_stock: item.in_my_stock === true,
+                          in_my_stock: Boolean(item.in_my_stock),
                           supplierId: supplierInfo ? supplierInfo.id : "",
                           data: item.dynamic_products?.data || {},
                           calculated_data: item.calculated_data || {},
