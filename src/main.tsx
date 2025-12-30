@@ -4,6 +4,7 @@ import "./index.css";
 import { registerSW } from 'virtual:pwa-register';
 import { setupOfflineHandler } from './utils/offlineHandler';
 import { initDB, cleanupOldOperations } from './lib/localDB';
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
 
 // Registrar Service Worker
 const updateSW = registerSW({
@@ -24,4 +25,8 @@ initDB().then(() => {
   cleanupOldOperations();
 });
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(
+  <AppErrorBoundary>
+    <App />
+  </AppErrorBoundary>
+);

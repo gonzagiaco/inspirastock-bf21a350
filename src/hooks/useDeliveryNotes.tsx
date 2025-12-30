@@ -373,12 +373,20 @@ export const useDeliveryNotes = () => {
         console.error("Error al sincronizar remito actualizado a IndexedDB:", error);
       }
     },
-    onSuccess: async () => {
+    onSuccess: async (_, variables) => {
       // Forzar refetch completo desde IndexedDB
       await queryClient.refetchQueries({
         queryKey: ["delivery-notes"],
         type: "active",
       });
+
+      if (variables?.id) {
+        // Forzar que el editor del remito no se quede con cache viejo (staleTime en useDeliveryNoteWithItems)
+        queryClient.invalidateQueries({
+          queryKey: ["delivery-note-with-items", variables.id],
+          refetchType: "active",
+        });
+      }
 
       invalidateProductQueries(queryClient);
       toast.success(isOnline ? "Remito actualizado exitosamente" : "Remito actualizado localmente");
