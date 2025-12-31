@@ -35,6 +35,21 @@ import { formatARS } from "@/utils/numberParser";
 import { DeliveryClient, DeliveryNote } from "@/types";
 import Header from "@/components/Header";
 
+const getItemSubtotal = (item: any) => Number(item.quantity) * Number(item.unitPrice);
+
+const buildNoteForOutput = (note: DeliveryNote): DeliveryNote => {
+  const items = (note.items || []).map((item: any) => ({
+    ...item,
+    subtotal: getItemSubtotal(item),
+  }));
+
+  const totalAmount = items.reduce((sum, item) => sum + Number(item.subtotal || 0), 0);
+  const paidAmount = Number(note.paidAmount || 0);
+  const remainingBalance = Math.max(0, totalAmount - paidAmount);
+
+  return { ...note, items, totalAmount, paidAmount, remainingBalance };
+};
+
 const Remitos = () => {
   const { deliveryNotes, isLoading, deleteDeliveryNote, markAsPaid, isDeleting } = useDeliveryNotes();
   const { clients, isLoading: isLoadingClients, deleteClient } = useDeliveryClients();
@@ -53,13 +68,11 @@ const Remitos = () => {
   const [clientToDelete, setClientToDelete] = useState<DeliveryClient | null>(null);
   const [isDeleteClientDialogOpen, setIsDeleteClientDialogOpen] = useState(false);
 
-  // Hook para obtener el remito con items (funciona offline)
   const { data: editingNoteData, isLoading: isLoadingEditNote } = useDeliveryNoteWithItems(
     editingNoteId,
-    isDialogOpen && !!editingNoteId
+    isDialogOpen && !!editingNoteId,
   );
 
-  // Cuando se cierra el diálogo, limpiar el ID
   useEffect(() => {
     if (!isDialogOpen) {
       setEditingNoteId(null);
@@ -77,13 +90,9 @@ const Remitos = () => {
     const matchesStatus = statusFilter === "all" || note.status === statusFilter;
     const matchesClient = !clientFilterId || note.clientId === clientFilterId;
 
-    let matchesDate = true;
-    if (dateFrom) {
-      matchesDate = matchesDate && new Date(note.issueDate) >= new Date(dateFrom);
-    }
-    if (dateTo) {
-      matchesDate = matchesDate && new Date(note.issueDate) <= new Date(dateTo);
-    }
+      let matchesDate = true;
+      if (dateFrom) matchesDate = matchesDate && new Date(note.issueDate) >= new Date(dateFrom);
+      if (dateTo) matchesDate = matchesDate && new Date(note.issueDate) <= new Date(dateTo);
 
     return matchesSearch && matchesStatus && matchesDate && matchesClient;
   });
@@ -116,92 +125,66 @@ const Remitos = () => {
   const clientDeleteCount = clientToDelete ? clientNoteCounts.get(clientToDelete.id) || 0 : 0;
 
   const handleExportPDF = (note: DeliveryNote) => {
-    generateDeliveryNotePDF(note);
+    generateDeliveryNotePDF(buildNoteForOutput(note));
   };
 
   const handleWhatsApp = async (note: DeliveryNote) => {
     setIsSendingWhatsApp(note.id);
-    
+
     try {
-      // Subir PDF a Supabase Storage
-      const { url: pdfUrl, error } = await uploadDeliveryNotePDF(note);
-      
+      const outputNote = buildNoteForOutput(note);
+
+      const { url: pdfUrl, error } = await uploadDeliveryNotePDF(outputNote);
       if (error) {
-        toast({
-          title: "Error al generar PDF",
-          description: error,
-          variant: "destructive",
-        });
+        toast({ title: "Error al generar PDF", description: error, variant: "destructive" });
         setIsSendingWhatsApp(null);
         return;
       }
 
-      // Construir lista de productos
-      const productsList = note.items?.map(
-        (item, index) => `${index + 1}. ${item.productName} x${item.quantity} - ${formatARS(item.subtotal)}`
-      ).join("\n") || "";
+      const productsList =
+        outputNote.items
+          ?.map((item, index) => `${index + 1}. ${item.productName} x${item.quantity} - ${formatARS(item.subtotal)}`)
+          .join("\n") || "";
 
-      // Construir mensaje con toda la información del remito
-      let message = `*REMITO*\n\n` +
-        `Fecha: ${format(new Date(note.issueDate), "dd/MM/yyyy")}\n` +
-        `Cliente: ${note.customerName}\n`;
-      
-      if (note.customerAddress) {
-        message += `Dirección: ${note.customerAddress}\n`;
-      }
-      
-      message += `\n*Productos:*\n${productsList}\n\n` +
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `*Total: ${formatARS(note.totalAmount)}*\n` +
-        `Pagado: ${formatARS(note.paidAmount)}\n` +
-        `Restante: ${formatARS(note.remainingBalance)}\n` +
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `Estado: ${note.status === 'paid' ? 'PAGADO' : 'PENDIENTE'}`;
-      
-      if (note.notes) {
-        message += `\n\n Notas: ${note.notes}`;
-      }
-      
-      message += `\n\n *Descargar PDF:*\n${pdfUrl}`;
+      let message =
+        `*REMITO*\n\n` +
+        `Fecha: ${format(new Date(outputNote.issueDate), "dd/MM/yyyy")}\n` +
+        `Cliente: ${outputNote.customerName}\n`;
+
+      if (outputNote.customerAddress) message += `Dirección: ${outputNote.customerAddress}\n`;
+
+      message +=
+        `\n*Productos:*\n${productsList}\n\n` +
+        `------------------\n` +
+        `*Total: ${formatARS(outputNote.totalAmount)}*\n` +
+        `Pagado: ${formatARS(outputNote.paidAmount)}\n` +
+        `Restante: ${formatARS(outputNote.remainingBalance)}\n` +
+        `------------------\n` +
+        `Estado: ${outputNote.status === "paid" ? "PAGADO" : "PENDIENTE"}`;
+
+      if (outputNote.notes) message += `\n\nNotas: ${outputNote.notes}`;
+
+      message += `\n\n*Descargar PDF:*\n${pdfUrl}`;
       message += `\n\n_Gracias por su compra_`;
 
       const encodedMessage = encodeURIComponent(message);
-
-      // Teléfono ya viene en formato +54XXXXXXXXXX
-      const phone = note.customerPhone?.replace(/\D/g, "");
-      const whatsappUrl = phone 
-        ? `https://wa.me/${phone}?text=${encodedMessage}` 
-        : `https://wa.me/?text=${encodedMessage}`;
+      const phone = outputNote.customerPhone?.replace(/\D/g, "");
+      const whatsappUrl = phone ? `https://wa.me/${phone}?text=${encodedMessage}` : `https://wa.me/?text=${encodedMessage}`;
 
       window.open(whatsappUrl, "_blank");
-      
-      toast({
-        title: "PDF generado",
-        description: "El remito se subió correctamente",
-      });
+      toast({ title: "PDF generado", description: "El remito se subió correctamente" });
     } catch (err) {
-      toast({
-        title: "Error",
-        description: "No se pudo generar el PDF para compartir",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "No se pudo generar el PDF para compartir", variant: "destructive" });
     } finally {
       setIsSendingWhatsApp(null);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (confirm("¿Estás seguro? Se revertirá el stock.")) {
-      await deleteDeliveryNote(id);
-    }
-  };
-
   const handleConfirmDelete = async () => {
-    if (noteToDelete) {
-      await deleteDeliveryNote(noteToDelete);
-      setNoteToDelete(null);
-      setIsDeleteDialogOpen(false);
-    }
+    if (!noteToDelete) return;
+    await deleteDeliveryNote(noteToDelete);
+    setNoteToDelete(null);
+    setIsDeleteDialogOpen(false);
   };
 
   const handleMarkAsPaid = async (id: string) => {
@@ -229,10 +212,11 @@ const Remitos = () => {
 
   return (
     <div className="p-4 lg:px-4 lg:py-10 flex-1 overflow-auto">
-      <div className="">
+      <div>
         <Header
           title="Remitos de Venta"
-          subtitle="Gestiona remitos, descuenta stock automáticamente y comunica con clientes" showSearch={false}
+          subtitle="Gestiona remitos, descuenta stock automáticamente y comunica con clientes"
+          showSearch={false}
           icon={<Receipt className="h-8 w-8" />}
         />
       </div>
@@ -302,11 +286,11 @@ const Remitos = () => {
             </div>
             <div className="space-y-1">
               <span className="text-sm font-medium">Desde</span>
-              <Input type="date" placeholder="Desde" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+              <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             </div>
             <div className="space-y-1">
               <span className="text-sm font-medium">Hasta</span>
-              <Input type="date" placeholder="Hasta" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+              <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
             </div>
           </CardContent>
         </Card>
@@ -330,135 +314,137 @@ const Remitos = () => {
         ) : (
           <TooltipProvider>
             <div className="grid gap-4">
-              {filteredNotes.map((note) => (
-                <Card key={note.id}>
-                  <CardContent className="pt-6">
-                    <div className="flex flex-col lg:flex-row justify-between items-start gap-4">
-                      <div className="space-y-2 flex-1 min-w-0">
-                        <div className="flex items-center gap-3">
-                          <h3 className="text-lg font-semibold">{note.customerName}</h3>
-                          <Badge variant={note.status === "paid" ? "default" : "secondary"}>
-                            {note.status === "paid" ? "Pagado" : "Pendiente"}
-                          </Badge>
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          Fecha: {format(new Date(note.issueDate), "dd/MM/yyyy")}
-                        </p>
-                        {note.customerAddress && <p className="text-sm">{note.customerAddress}</p>}
-                        {note.customerPhone && <p className="text-sm">Tel: {note.customerPhone}</p>}
-                        <div className="flex flex-wrap gap-4 text-sm mt-2">
-                          <span>
-                            Total: <strong>{formatARS(note.totalAmount)}</strong>
-                          </span>
-                          <span>
-                            Pagado: <strong>{formatARS(note.paidAmount)}</strong>
-                          </span>
-                          <span>
-                            Restante: <strong>{formatARS(note.remainingBalance)}</strong>
-                          </span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">{note.items?.length || 0} producto(s)</p>
-                        {note.notes && (
-                          <div className="mt-2 p-2 bg-muted/50 rounded-md">
-                            <p className="text-xs font-medium text-muted-foreground">Notas:</p>
-                            <p className="text-sm">{note.notes}</p>
+              {filteredNotes.map((note) => {
+                const outputNote = buildNoteForOutput(note);
+
+                return (
+                  <Card key={note.id}>
+                    <CardContent className="pt-6">
+                      <div className="flex flex-col lg:flex-row justify-between items-start gap-4">
+                        <div className="space-y-2 flex-1 min-w-0">
+                          <div className="flex items-center gap-3">
+                            <h3 className="text-lg font-semibold">{note.customerName}</h3>
+                            <Badge variant={note.status === "paid" ? "default" : "destructive"}>
+                              {note.status === "paid" ? "Pagado" : "Pendiente"}
+                            </Badge>
                           </div>
-                        )}
-                      </div>
-                      
-                      <div className="flex flex-wrap gap-2 justify-end items-start">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => {
-                                setEditingNoteId(note.id);
-                                setIsDialogOpen(true);
-                              }}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Editar remito</p>
-                          </TooltipContent>
-                        </Tooltip>
+                          <p className="text-sm text-muted-foreground">Fecha: {format(new Date(note.issueDate), "dd/MM/yyyy")}</p>
+                          {note.customerAddress && <p className="text-sm">{note.customerAddress}</p>}
+                          {note.customerPhone && <p className="text-sm">Tel: {note.customerPhone}</p>}
+                          <div className="flex flex-wrap gap-4 text-sm mt-2">
+                            <span>
+                              Total: <strong>{formatARS(outputNote.totalAmount)}</strong>
+                            </span>
+                            <span>
+                              Pagado: <strong>{formatARS(outputNote.paidAmount)}</strong>
+                            </span>
+                            <span>
+                              Restante: <strong>{formatARS(outputNote.remainingBalance)}</strong>
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">{note.items?.length || 0} producto(s)</p>
+                          {note.notes && (
+                            <div className="mt-2 p-2 bg-muted/50 rounded-md">
+                              <p className="text-xs font-medium text-muted-foreground">Notas:</p>
+                              <p className="text-sm">{note.notes}</p>
+                            </div>
+                          )}
+                        </div>
 
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button size="sm" variant="outline" onClick={() => handleExportPDF(note)}>
-                              <Download className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Descargar PDF</p>
-                          </TooltipContent>
-                        </Tooltip>
-
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button 
-                              size="sm" 
-                              variant="outline" 
-                              onClick={() => handleWhatsApp(note)}
-                              disabled={isSendingWhatsApp === note.id}
-                            >
-                              {isSendingWhatsApp === note.id ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <MessageCircle className="h-4 w-4" />
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>{isSendingWhatsApp === note.id ? "Subiendo PDF..." : "Enviar por WhatsApp"}</p>
-                          </TooltipContent>
-                        </Tooltip>
-
-                        {note.status === "pending" && (
+                        <div className="flex flex-wrap gap-2 justify-end items-start">
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button size="sm" variant="outline" onClick={() => handleMarkAsPaid(note.id)}>
-                                <CheckCircle className="h-4 w-4" />
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  setEditingNoteId(note.id);
+                                  setIsDialogOpen(true);
+                                }}
+                              >
+                                <Edit className="h-4 w-4" />
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>
-                              <p>Marcar como pagado</p>
+                              <p>Editar remito</p>
                             </TooltipContent>
                           </Tooltip>
-                        )}
 
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button 
-                              size="sm" 
-                              variant="destructive"
-                              disabled={isDeleting}
-                              onClick={() => {
-                                setNoteToDelete(note.id);
-                                setIsDeleteDialogOpen(true);
-                              }}
-                            >
-                              {isDeleting && noteToDelete === note.id ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Trash2 className="h-4 w-4" />
-                              )}
-                              <span className="ml-2 hidden sm:inline">
-                                {isDeleting && noteToDelete === note.id ? "Eliminando..." : "Eliminar"}
-                              </span>
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Eliminar remito y revertir stock</p>
-                          </TooltipContent>
-                        </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button size="sm" variant="outline" onClick={() => handleExportPDF(note)}>
+                                <Download className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Descargar PDF</p>
+                            </TooltipContent>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleWhatsApp(note)}
+                                disabled={isSendingWhatsApp === note.id}
+                              >
+                                {isSendingWhatsApp === note.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <MessageCircle className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>{isSendingWhatsApp === note.id ? "Subiendo PDF..." : "Enviar por WhatsApp"}</p>
+                            </TooltipContent>
+                          </Tooltip>
+
+                          {note.status === "pending" && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button size="sm" variant="outline" onClick={() => handleMarkAsPaid(note.id)}>
+                                  <CheckCircle className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Marcar como pagado</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                disabled={isDeleting}
+                                onClick={() => {
+                                  setNoteToDelete(note.id);
+                                  setIsDeleteDialogOpen(true);
+                                }}
+                              >
+                                {isDeleting && noteToDelete === note.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                                <span className="ml-2 hidden sm:inline">
+                                  {isDeleting && noteToDelete === note.id ? "Eliminando..." : "Eliminar"}
+                                </span>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Eliminar remito y revertir stock</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           </TooltipProvider>
         )}
@@ -566,18 +552,14 @@ const Remitos = () => {
             <AlertDialogHeader>
               <AlertDialogTitle>¿Estás seguro?</AlertDialogTitle>
               <AlertDialogDescription>
-                Esta acción eliminará el remito y revertirá el stock de los productos asociados.
-                Esta operación no se puede deshacer.
+                Esta acción eliminará el remito y revertirá el stock de los productos asociados. Esta operación no se puede deshacer.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel 
-                onClick={() => setNoteToDelete(null)}
-                disabled={isDeleting}
-              >
+              <AlertDialogCancel onClick={() => setNoteToDelete(null)} disabled={isDeleting}>
                 Cancelar
               </AlertDialogCancel>
-              <AlertDialogAction 
+              <AlertDialogAction
                 onClick={handleConfirmDelete}
                 disabled={isDeleting}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"

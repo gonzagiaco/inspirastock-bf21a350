@@ -1,11 +1,11 @@
-import { useState, useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { DeliveryNote, CreateDeliveryNoteInput } from "@/types";
@@ -16,11 +16,17 @@ import { X, Plus, Minus, Loader2 } from "lucide-react";
 import { formatARS } from "@/utils/numberParser";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { localDB } from "@/lib/localDB";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { useProductLists } from "@/hooks/useProductLists";
+import { MappingConfig } from "@/components/suppliers/ListConfigurationView";
+import { resolveDeliveryNoteUnitPrice } from "@/utils/deliveryNotePricing";
 
 const deliveryNoteSchema = z.object({
   customerName: z.string().min(1, "Nombre requerido").max(100),
   customerAddress: z.string().max(200).optional(),
-  customerPhone: z.string()
+  customerPhone: z
+    .string()
     .regex(/^\+54\d{10}$/, "Formato inválido. Debe ser +54 seguido de 10 dígitos")
     .optional()
     .or(z.literal("")),
@@ -38,6 +44,7 @@ interface DeliveryNoteDialogProps {
 }
 
 interface CartItem {
+  lineId: string;
   productId?: string;
   productCode: string;
   productName: string;
@@ -45,14 +52,18 @@ interface CartItem {
   unitPrice: number;
 }
 
-const DeliveryNoteDialog = ({
-  open,
-  onOpenChange,
-  note,
-  isLoadingNote = false,
-  initialClientId,
-}: DeliveryNoteDialogProps) => {
+const createLineId = () => {
+  const randomId = (globalThis as any)?.crypto?.randomUUID?.();
+  return typeof randomId === "string" ? randomId : `${Date.now()}-${Math.random()}`;
+};
+
+const samePrice = (a: number, b: number) => Math.abs(a - b) < 0.0001;
+const OLD_PRICE_MESSAGE = "El precio de este producto es antigüo. Utiliza el buscador para agregarlo nuevamente.";
+
+const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, initialClientId }: DeliveryNoteDialogProps) => {
   const { createDeliveryNote, updateDeliveryNote } = useDeliveryNotes();
+  const { productLists } = useProductLists();
+  const isOnline = useOnlineStatus();
   const { clients, createClient } = useDeliveryClients();
   const [items, setItems] = useState<CartItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -61,8 +72,41 @@ const DeliveryNoteDialog = ({
   const [clientSearch, setClientSearch] = useState("");
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
 
-  const { register, handleSubmit, formState: { errors }, reset, setValue } = useForm({
+
+
+  const [currentUnitPriceByKey, setCurrentUnitPriceByKey] = useState<Record<string, number>>({});
+
+  const getItemPriceKey = (item: Pick<CartItem, "productId" | "productCode">) =>
+    item.productId ? `id:${item.productId}` : `code:${item.productCode}`;
+
+  const isOldPriceItem = (item: Pick<CartItem, "productId" | "productCode" | "unitPrice">) => {
+    const currentUnitPrice = currentUnitPriceByKey[getItemPriceKey(item)];
+    return typeof currentUnitPrice === "number" && !samePrice(item.unitPrice, currentUnitPrice);
+  };
+
+  const showOldPriceToast = () => {
+    toast(OLD_PRICE_MESSAGE, { duration: 5000 });
+  };
+
+  const mappingConfigByListId = useMemo(() => {
+    const map = new Map<string, MappingConfig | undefined>();
+    for (const list of productLists || []) {
+      if (!list?.id) continue;
+      map.set(String(list.id), list.mapping_config as MappingConfig | undefined);
+    }
+    return map;
+  }, [productLists]);
+
+  const { control, register, handleSubmit, formState: { errors }, reset, setValue } = useForm({
     resolver: zodResolver(deliveryNoteSchema),
+    defaultValues: {
+      customerName: "",
+      customerAddress: "",
+      customerPhone: "",
+      issueDate: new Date().toISOString().split("T")[0],
+      paidAmount: undefined,
+      notes: "",
+    },
   });
 
   const selectedClient = useMemo(
@@ -87,14 +131,87 @@ const DeliveryNoteDialog = ({
     const map = new Map<string, number>();
     note?.items?.forEach((item) => {
       if (item.productId) {
-        map.set(item.productId, item.quantity);
+        map.set(item.productId, (map.get(item.productId) ?? 0) + item.quantity);
       }
     });
     return map;
   }, [note]);
 
-  const getReservedQuantity = (productId?: string) =>
-    productId ? reservedQuantities.get(productId) ?? 0 : 0;
+  const getReservedQuantity = (productId?: string) => (productId ? reservedQuantities.get(productId) ?? 0 : 0);
+
+  const itemsRef = useRef<CartItem[]>([]);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  const getAvailableForEdit = async (productId: string) => {
+    const reservedQuantity = getReservedQuantity(productId);
+
+    const localIndexRecord = await localDB.dynamic_products_index.where("product_id").equals(productId).first();
+    if (typeof localIndexRecord?.quantity === "number") {
+      return (localIndexRecord.quantity || 0) + reservedQuantity;
+    }
+
+    if (!isOnline) return reservedQuantity;
+
+    const { data, error } = await supabase
+      .from("dynamic_products_index")
+      .select("quantity")
+      .eq("product_id", productId)
+      .single();
+
+    if (error) return reservedQuantity;
+    return (data?.quantity || 0) + reservedQuantity;
+  };
+
+  const resolveProductIdByCode = async (productCode: string) => {
+    const normalized = String(productCode || "").trim();
+    if (!normalized) return null;
+    const row = await localDB.dynamic_products_index.where("code").equals(normalized).first();
+    return row?.product_id ? String(row.product_id) : null;
+  };
+
+  const resolveCurrentUnitPrice = async (productId: string | undefined, productCode: string, fallback: number) => {
+    const resolvedProductId = productId ?? (await resolveProductIdByCode(productCode));
+    if (!resolvedProductId) return fallback;
+
+    const indexRow = await localDB.dynamic_products_index.where("product_id").equals(resolvedProductId).first();
+    const localProductRow = await localDB.dynamic_products.get(resolvedProductId);
+    const listId =
+      indexRow?.list_id != null ? String(indexRow.list_id) : localProductRow?.list_id != null ? String(localProductRow.list_id) : null;
+
+    const mappingConfig = listId ? mappingConfigByListId.get(listId) : undefined;
+    const priceCol = mappingConfig?.delivery_note_price_column;
+
+    const resolved = await resolveDeliveryNoteUnitPrice(priceCol, mappingConfig, { price: indexRow?.price }, { indexRow, localProductRow });
+    return resolved ?? fallback;
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+
+    const run = async () => {
+      const unique = new Map<string, { productId?: string; productCode: string; fallback: number }>();
+      for (const item of items) {
+        const key = getItemPriceKey(item);
+        if (unique.has(key)) continue;
+        unique.set(key, { productId: item.productId, productCode: item.productCode, fallback: item.unitPrice });
+      }
+
+      const next: Record<string, number> = {};
+      for (const [key, info] of unique.entries()) {
+        next[key] = await resolveCurrentUnitPrice(info.productId, info.productCode, info.fallback);
+      }
+
+      if (!cancelled) setCurrentUnitPriceByKey(next);
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, items, mappingConfigByListId]);
 
   useEffect(() => {
     if (clientMode !== "existing" || !selectedClient) return;
@@ -109,9 +226,15 @@ const DeliveryNoteDialog = ({
     if (!open) return;
 
     if (note) {
-      setValue("customerName", note.customerName);
-      setValue("customerAddress", note.customerAddress || "");
-      setValue("customerPhone", note.customerPhone || "");
+      reset({
+        customerName: note.customerName,
+        customerAddress: note.customerAddress || "",
+        customerPhone: note.customerPhone || "",
+        issueDate: note.issueDate.split("T")[0],
+        paidAmount: note.paidAmount ?? undefined,
+        notes: note.notes || "",
+      });
+
       setPhoneNumber(note.customerPhone || "");
       setValue("issueDate", note.issueDate.split("T")[0]);
       setValue("paidAmount", note.paidAmount);
@@ -123,6 +246,7 @@ const DeliveryNoteDialog = ({
 
       setItems(
         note.items?.map((item) => ({
+          lineId: item.id,
           productId: item.productId,
           productCode: item.productCode,
           productName: item.productName,
@@ -131,7 +255,15 @@ const DeliveryNoteDialog = ({
         })) || [],
       );
     } else {
-      reset();
+      reset({
+        customerName: "",
+        customerAddress: "",
+        customerPhone: "",
+        issueDate: new Date().toISOString().split("T")[0],
+        paidAmount: undefined,
+        notes: "",
+      });
+      setPhoneNumber("");
       setItems([]);
       setClientSearch("");
 
@@ -145,114 +277,119 @@ const DeliveryNoteDialog = ({
     }
   }, [note, open, initialClientId, setValue, reset]);
 
-  const handleAddProduct = async (product: { id?: string; code: string; name: string; price: number }) => {
-    // 🔧 NUEVO: Validar stock disponible
-    if (product.id) {
-      const { data: indexProduct, error } = await supabase
-        .from("dynamic_products_index")
-        .select("quantity")
-        .eq("product_id", product.id)
-        .single();
+  const handleAddProduct = async (product: { id?: string; listId?: string; code: string; name: string; price: number }) => {
+    const normalizedCode = String(product.code || "SIN-CODIGO").trim();
 
-      if (error) {
-        console.error("Error al verificar stock:", error);
-      } else if (indexProduct) {
-        const availableStock = indexProduct.quantity || 0;
-        const reservedQuantity = getReservedQuantity(product.id);
-        const availableForEdit = availableStock + reservedQuantity;
-        
-        // Verificar si ya está en la lista
-        const existingItem = items.find(i => i.productCode === product.code);
-        const currentQuantity = existingItem ? existingItem.quantity : 0;
-        
-        if (availableForEdit <= 0) {
-          toast.error(`⚠️ ${product.name} no tiene stock disponible`);
-          return;
-        }
-        
-        if (currentQuantity + 1 > availableForEdit) {
-          toast.warning(
-            `⚠️ Stock limitado: solo quedan ${availableForEdit} unidades de ${product.name}`
-          );
-        }
+    const productId = product.id;
+    if (productId) {
+      const availableForEdit = await getAvailableForEdit(productId);
+      const currentQuantity = itemsRef.current
+        .filter((i) => i.productId === productId || (!i.productId && i.productCode === normalizedCode))
+        .reduce((sum, i) => sum + i.quantity, 0);
+
+      if (availableForEdit <= 0 || currentQuantity >= availableForEdit) {
+        toast.error(`Stock insuficiente: solo hay ${availableForEdit} unidades disponibles`);
+        return;
       }
     }
 
-    const existingItem = items.find(i => i.productCode === product.code);
-    
-    if (existingItem) {
-      setItems(items.map(i => 
-        i.productCode === product.code 
-          ? { ...i, quantity: i.quantity + 1 }
-          : i
-      ));
-      toast.success(`Cantidad aumentada: ${product.name}`);
-    } else {
-      setItems([...items, {
-        productId: product.id,
-        productCode: product.code,
-        productName: product.name,
-        quantity: 1,
-        unitPrice: product.price,
-      }]);
-      toast.success(`Producto agregado: ${product.name}`);
-    }
+    setItems((prev) => {
+      const existingItem = prev.find((i) => {
+        const sameProduct = productId
+          ? i.productId === productId || (!i.productId && i.productCode === normalizedCode)
+          : i.productCode === normalizedCode;
+        return sameProduct && samePrice(i.unitPrice, product.price);
+      });
+
+      if (existingItem) {
+        return prev.map((i) => (i.lineId === existingItem.lineId ? { ...i, quantity: i.quantity + 1 } : i));
+      }
+
+      return [
+        ...prev,
+        {
+          lineId: createLineId(),
+          productId,
+          productCode: normalizedCode,
+          productName: product.name,
+          quantity: 1,
+          unitPrice: product.price,
+        },
+      ];
+    });
   };
 
-  const handleRemoveItem = (code: string) => {
+  const handleRemoveItem = (lineId: string) => {
     if (items.length === 1) {
       toast.warning("Debes mantener al menos un producto en el remito");
       return;
     }
-    
-    setItems(items.filter(i => i.productCode !== code));
-    toast.success("Producto eliminado del remito");
+    setItems((prev) => prev.filter((i) => i.lineId !== lineId));
   };
 
-  const handleUpdateQuantity = async (code: string, delta: number) => {
-    const item = items.find(i => i.productCode === code);
-    if (!item) return;
+  const handleDecrementQuantity = (lineId: string) => {
+    setItems((prev) =>
+      prev.map((i) => {
+        if (i.lineId !== lineId) return i;
+        const nextQty = i.quantity - 1;
+        if (nextQty < 1) return i;
+        return { ...i, quantity: nextQty };
+      }),
+    );
+  };
 
-    const newQuantity = item.quantity + delta;
-    
-    if (newQuantity < 1) {
-      toast.error("La cantidad debe ser al menos 1");
-      return;
-    }
+  const handleIncrementAtCurrentPrice = async (lineId: string) => {
+    const currentItems = itemsRef.current;
+    const baseLine = currentItems.find((i) => i.lineId === lineId);
+    if (!baseLine) return;
 
-    // 🔧 NUEVO: Validar stock disponible al aumentar
-    if (delta > 0 && item.productId) {
-      const { data: indexProduct } = await supabase
-        .from("dynamic_products_index")
-        .select("quantity")
-        .eq("product_id", item.productId)
-        .single();
+    const resolvedProductId = baseLine.productId ?? (await resolveProductIdByCode(baseLine.productCode));
 
-      if (indexProduct) {
-        const availableStock = indexProduct.quantity || 0;
-        const reservedQuantity = getReservedQuantity(item.productId);
-        const availableForEdit = availableStock + reservedQuantity;
-        
-        if (newQuantity > availableForEdit) {
-          toast.error(
-            `⚠️ Stock insuficiente: solo hay ${availableForEdit} unidades disponibles`
-          );
-          return;
-        }
+    if (resolvedProductId) {
+      const availableForEdit = await getAvailableForEdit(resolvedProductId);
+      const currentTotalQuantity = currentItems
+        .filter((i) => i.productId === resolvedProductId || (!i.productId && i.productCode === baseLine.productCode))
+        .reduce((sum, i) => sum + i.quantity, 0);
+
+      if (currentTotalQuantity + 1 > availableForEdit) {
+        toast.error(`Stock insuficiente: solo hay ${availableForEdit} unidades disponibles`);
+        return;
       }
     }
 
-    setItems(items.map(i => {
-      if (i.productCode === code) {
-        return { ...i, quantity: newQuantity };
+    const currentPrice = await resolveCurrentUnitPrice(resolvedProductId, baseLine.productCode, baseLine.unitPrice);
+
+    setItems((prev) => {
+      const sameProduct = (i: CartItem) =>
+        resolvedProductId
+          ? i.productId === resolvedProductId || (!i.productId && i.productCode === baseLine.productCode)
+          : i.productCode === baseLine.productCode;
+
+      if (samePrice(currentPrice, baseLine.unitPrice)) {
+        return prev.map((i) => (i.lineId === baseLine.lineId ? { ...i, quantity: i.quantity + 1 } : i));
       }
-      return i;
-    }));
+
+      const existingAtCurrentPrice = prev.find((i) => sameProduct(i) && samePrice(i.unitPrice, currentPrice));
+      if (existingAtCurrentPrice) {
+        return prev.map((i) =>
+          i.lineId === existingAtCurrentPrice.lineId ? { ...i, quantity: i.quantity + 1 } : i,
+        );
+      }
+
+      return [
+        ...prev,
+        {
+          ...baseLine,
+          lineId: createLineId(),
+          productId: resolvedProductId ?? baseLine.productId,
+          quantity: 1,
+          unitPrice: currentPrice,
+        },
+      ];
+    });
   };
 
-  const calculateTotal = () => {
-    return items.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
-  };
+  const calculateTotal = () => items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
 
   const onSubmit = async (data: any) => {
     if (items.length === 0) {
@@ -260,35 +397,25 @@ const DeliveryNoteDialog = ({
       return;
     }
 
-    // 🔧 NUEVO: Validar stock total antes de crear/actualizar
     const stockErrors: string[] = [];
-    
-    for (const item of items) {
-      if (item.productId) {
-        const { data: indexProduct } = await supabase
-          .from("dynamic_products_index")
-          .select("quantity")
-          .eq("product_id", item.productId)
-          .single();
+    const quantitiesByProductId = new Map<string, { productName: string; quantity: number }>();
 
-        if (indexProduct) {
-          const availableStock = indexProduct.quantity || 0;
-          const reservedQuantity = getReservedQuantity(item.productId);
-          const availableForEdit = availableStock + reservedQuantity;
-          
-          if (item.quantity > availableForEdit) {
-            stockErrors.push(
-              `${item.productName}: necesitas ${item.quantity} pero solo hay ${availableForEdit}`
-            );
-          }
-        }
+    for (const item of items) {
+      if (!item.productId) continue;
+      const existing = quantitiesByProductId.get(item.productId);
+      if (existing) existing.quantity += item.quantity;
+      else quantitiesByProductId.set(item.productId, { productName: item.productName, quantity: item.quantity });
+    }
+
+    for (const [productId, { productName, quantity }] of quantitiesByProductId) {
+      const availableForEdit = await getAvailableForEdit(productId);
+      if (quantity > availableForEdit) {
+        stockErrors.push(`${productName}: necesitas ${quantity} pero solo hay ${availableForEdit}`);
       }
     }
 
     if (stockErrors.length > 0) {
-      toast.error("Stock insuficiente", {
-        description: stockErrors.join("\n"),
-      });
+      toast.error("Stock insuficiente", { description: stockErrors.join("\n") });
       return;
     }
 
@@ -298,8 +425,26 @@ const DeliveryNoteDialog = ({
     let resolvedPhone = data.customerPhone;
     let resolvedAddress = data.customerAddress;
 
+    const input: CreateDeliveryNoteInput = {
+      customerName: data.customerName,
+      customerAddress: data.customerAddress,
+      customerPhone: data.customerPhone,
+      issueDate: data.issueDate || new Date().toISOString(),
+      paidAmount: data.paidAmount || 0,
+      notes: data.notes,
+      items: items.map((item) => ({
+        productId: item.productId,
+        productCode: item.productCode,
+        productName: item.productName,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+      })),
+    };
+
     try {
       setIsSubmitting(true);
+      if (note) await updateDeliveryNote({ id: note.id, ...input });
+      else await createDeliveryNote(input);
 
       if (clientMode === "existing") {
         const fallbackClientId = selectedClient?.id || note?.clientId || null;
@@ -327,16 +472,11 @@ const DeliveryNoteDialog = ({
         resolvedClientId = note?.clientId || null;
       }
 
-      const input: CreateDeliveryNoteInput = {
-        clientId: resolvedClientId,
-        customerName: resolvedName,
-        customerAddress: resolvedAddress,
-        customerPhone: resolvedPhone,
-        issueDate: data.issueDate || new Date().toISOString(),
-        paidAmount: data.paidAmount || 0,
-        notes: data.notes,
-        items,
-      };
+      input.clientId = resolvedClientId;
+      input.customerName = resolvedName;
+      input.customerAddress = resolvedAddress;
+      input.customerPhone = resolvedPhone;
+      input.items = items;
 
       if (note) {
         await updateDeliveryNote({ id: note.id, ...input });
@@ -345,6 +485,7 @@ const DeliveryNoteDialog = ({
       }
       onOpenChange(false);
       reset();
+      setPhoneNumber("");
       setItems([]);
     } catch (error) {
       console.error("Error saving delivery note:", error);
@@ -353,7 +494,6 @@ const DeliveryNoteDialog = ({
     }
   };
 
-  // Si estamos cargando los datos del remito, mostrar skeleton
   if (isLoadingNote) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -456,44 +596,45 @@ const DeliveryNoteDialog = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <Label htmlFor="customerName">Nombre del Cliente *</Label>
-              <Input
-                id="customerName"
-                readOnly={lockCustomerFields}
-                className={lockCustomerFields ? "bg-muted" : ""}
-                {...register("customerName")}
-              />
-              {errors.customerName && (
-                <p className="text-sm text-red-500">{errors.customerName.message as string}</p>
-              )}
-            </div>
-            <div>
-              <Label htmlFor="customerPhone">Teléfono (WhatsApp)</Label>
-              <div className="flex gap-2">
-                <div className="flex items-center bg-muted px-3 rounded-md border">
-                  <span className="text-sm font-medium">+54</span>
-                </div>
-                <Input
-                  id="customerPhone"
-                  placeholder="1112345678"
-                  type="tel"
-                  maxLength={10}
-                  value={phoneNumber.replace("+54", "")}
-                  readOnly={lockCustomerFields}
-                  className={lockCustomerFields ? "bg-muted" : ""}
-                  onChange={(e) => {
-                    if (lockCustomerFields) return;
-                    const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
-                    const fullNumber = digits ? `+54${digits}` : "";
-                    setPhoneNumber(fullNumber);
-                    setValue("customerPhone", fullNumber);
-                  }}
-                />
-              </div>
-              {errors.customerPhone && (
-                <p className="text-sm text-red-500">{errors.customerPhone.message as string}</p>
-              )}
-            </div>
-          </div>
+  <Input
+    id="customerName"
+    readOnly={lockCustomerFields}
+    className={lockCustomerFields ? "bg-muted" : ""}
+    {...register("customerName")}
+  />
+  {
+    errors.customerName && (
+      <p className="text-sm text-red-500">{errors.customerName.message as string}</p>
+    )
+  }
+            </div >
+  <div>
+    <Label htmlFor="customerPhone">Teléfono (WhatsApp)</Label>
+    <div className="flex gap-2">
+      <div className="flex items-center bg-muted px-3 rounded-md border">
+        <span className="text-sm font-medium">+54</span>
+      </div>
+      <Input
+        id="customerPhone"
+        placeholder="1112345678"
+        type="tel"
+        maxLength={10}
+        value={phoneNumber.replace("+54", "")}
+        readOnly={lockCustomerFields}
+        className={lockCustomerFields ? "bg-muted" : ""}
+        onChange={(e) => {
+          if (lockCustomerFields) return;
+          const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
+          const fullNumber = digits ? `+54${digits}` : "";
+          setPhoneNumber(fullNumber);
+          setValue("customerPhone", fullNumber);
+        }}
+      />
+      <input type="hidden" {...register("customerPhone")} />
+    </div>
+    {errors.customerPhone && <p className="text-sm text-red-500">{errors.customerPhone.message as string}</p>}
+  </div>
+          </div >
 
           <div>
             <Label htmlFor="customerAddress">Dirección</Label>
@@ -508,23 +649,26 @@ const DeliveryNoteDialog = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <Label htmlFor="issueDate">Fecha de Emisión *</Label>
-              <Input 
-                type="date" 
-                id="issueDate" 
-                {...register("issueDate")}
-                defaultValue={new Date().toISOString().split('T')[0]}
-              />
-              {errors.issueDate && (
-                <p className="text-sm text-red-500">{errors.issueDate.message as string}</p>
-              )}
+              <Input type="date" id="issueDate" {...register("issueDate")} />
+              {errors.issueDate && <p className="text-sm text-red-500">{errors.issueDate.message as string}</p>}
             </div>
             <div>
               <Label htmlFor="paidAmount">Monto Pagado</Label>
-              <Input
-                type="number"
-                step="0.01"
-                id="paidAmount"
-                {...register("paidAmount", { valueAsNumber: true })}
+              <Controller
+                control={control}
+                name="paidAmount"
+                render={({ field }) => (
+                  <Input
+                    type="number"
+                    step="0.01"
+                    id="paidAmount"
+                    value={field.value ?? ""}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      field.onChange(next === "" ? undefined : Number(next));
+                    }}
+                  />
+                )}
               />
             </div>
           </div>
@@ -539,88 +683,97 @@ const DeliveryNoteDialog = ({
             <DeliveryNoteProductSearch onSelect={handleAddProduct} />
           </div>
 
-          {items.length > 0 && (
-            <div className="space-y-2">
-              <Label>Productos Seleccionados</Label>
-              <div className="border rounded-lg divide-y">
-                {items.map((item) => (
-                  <div key={item.productCode} className="p-3 flex justify-between items-center">
-                    <div className="flex-1">
-                      <p className="font-medium">{item.productName}</p>
-                      <p className="text-sm text-muted-foreground">
-                        Código: {item.productCode} | {formatARS(item.unitPrice)} c/u
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex flex-col md:flex-row items-center gap-2 md:gap-6">
-                      <div className="flex items-center">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleUpdateQuantity(item.productCode, -1)}
-                      >
-                        <Minus className="h-4 w-4" />
-                      </Button>
-                      <span className="w-12 text-center">{item.quantity}</span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleUpdateQuantity(item.productCode, 1)}
-                      >
-                        <Plus className="h-4 w-4" />
-                      </Button>
-                      </div>
-                      <span className="w-28 text-right font-medium whitespace-nowrap">
-                        {formatARS(item.quantity * item.unitPrice)}
-                      </span>
-
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleRemoveItem(item.productCode)}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="flex justify-end items-center gap-4 pt-2 border-t">
-                <span className="text-lg font-semibold">Total:</span>
-                <span className="text-2xl font-bold text-primary">
-                  {formatARS(calculateTotal())}
+{
+  items.length > 0 && (
+    <div className="space-y-2">
+      <Label>Productos Seleccionados</Label>
+      <div className="border rounded-lg divide-y">
+        {items.map((item) => (
+          <div key={item.lineId} className="p-3 flex justify-between items-center">
+            <div className="flex-1">
+              <p className="font-medium">{item.productName}</p>
+              <p className="text-sm text-muted-foreground">
+                Código: {item.productCode} | {formatARS(item.unitPrice)} c/u
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex flex-col md:flex-row items-center gap-2 md:gap-6">
+                <div className="flex items-center">
+                  <span
+                    className="inline-flex"
+                    onClick={() => {
+                      if (isOldPriceItem(item)) showOldPriceToast();
+                    }}
+                  >
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={isOldPriceItem(item)}
+                      className={isOldPriceItem(item) ? "pointer-events-none" : undefined}
+                      onClick={() => handleDecrementQuantity(item.lineId)}
+                    >
+                      <Minus className="h-4 w-4" />
+                    </Button>
+                  </span>
+                  <span className="w-12 text-center">{item.quantity}</span>
+                  <span
+                    className="inline-flex"
+                    onClick={() => {
+                      if (isOldPriceItem(item)) showOldPriceToast();
+                    }}
+                  >
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={isOldPriceItem(item)}
+                      className={isOldPriceItem(item) ? "pointer-events-none" : undefined}
+                      onClick={() => handleIncrementAtCurrentPrice(item.lineId)}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </span>
+                </div>
+                <span className="w-28 text-right font-medium whitespace-nowrap">
+                  {formatARS(item.quantity * item.unitPrice)}
                 </span>
               </div>
+              <Button type="button" size="sm" variant="ghost" onClick={() => handleRemoveItem(item.lineId)}>
+                <X className="h-4 w-4" />
+              </Button>
             </div>
-          )}
-
-          <div className="flex justify-end gap-2">
-            <Button 
-              type="button" 
-              variant="outline" 
-              onClick={() => onOpenChange(false)}
-              disabled={isSubmitting}
-            >
-              Cancelar
-            </Button>
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {note ? "Actualizando..." : "Creando..."}
-                </>
-              ) : (
-                note ? "Actualizar Remito" : "Crear Remito"
-              )}
-            </Button>
           </div>
-        </form>
-      </DialogContent>
-    </Dialog>
+        ))}
+      </div>
+      <div className="flex justify-end items-center gap-4 pt-2 border-t">
+        <span className="text-lg font-semibold">Total:</span>
+        <span className="text-2xl font-bold text-primary">{formatARS(calculateTotal())}</span>
+      </div>
+    </div>
+  )
+}
+
+<div className="flex justify-end gap-2">
+  <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+    Cancelar
+  </Button>
+  <Button type="submit" disabled={isSubmitting}>
+    {isSubmitting ? (
+      <>
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        {note ? "Actualizando..." : "Creando..."}
+      </>
+    ) : note ? (
+      "Actualizar Remito"
+    ) : (
+      "Crear Remito"
+    )}
+  </Button>
+</div>
+        </form >
+      </DialogContent >
+    </Dialog >
   );
 };
 

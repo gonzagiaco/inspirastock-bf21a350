@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Search, Loader2, X } from "lucide-react";
@@ -12,12 +12,13 @@ import { localDB } from "@/lib/localDB";
 import { supabase } from "@/integrations/supabase/client";
 
 interface ProductSearchProps {
-  onSelect: (product: { id?: string; code: string; name: string; price: number }) => void;
+  onSelect: (product: { id?: string; listId?: string; code: string; name: string; price: number }) => void;
 }
 
 const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
+  const [displayPricesByProductId, setDisplayPricesByProductId] = useState<Record<string, number>>({});
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const { productLists } = useProductLists();
@@ -46,6 +47,206 @@ const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
     const parsed = parseFloat(String(rawValue).replace(/[^0-9.,-]/g, "").replace(",", "."));
     return Number.isNaN(parsed) ? null : parsed;
   };
+
+  const mappingConfigByListId = useMemo(() => {
+    const map = new Map<string, MappingConfig | undefined>();
+    for (const list of productLists || []) {
+      if (!list?.id) continue;
+      map.set(String(list.id), list.mapping_config as MappingConfig | undefined);
+    }
+    return map;
+  }, [productLists]);
+
+  useEffect(() => {
+    setDisplayPricesByProductId({});
+  }, [productLists]);
+
+  const getRemitoDisplayPrice = (product: any): number => {
+    const fallback = parsePriceValue(product?.price) ?? 0;
+
+    const listId = product?.list_id != null ? String(product.list_id) : null;
+    const mappingConfig = listId ? mappingConfigByListId.get(listId) : undefined;
+    const priceCol = mappingConfig?.delivery_note_price_column;
+    if (!priceCol) return fallback;
+
+    const fromCalculated = parsePriceValue(product?.calculated_data?.[priceCol]);
+    const fromDynamicData = parsePriceValue(product?.dynamic_products?.data?.[priceCol]);
+    const fromProductData = parsePriceValue(product?.data?.[priceCol]);
+
+    return fromCalculated ?? fromDynamicData ?? fromProductData ?? fallback;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const resolveCustomColumnPrice = async (
+      product: any,
+      mappingConfig: MappingConfig,
+      columnKey: string,
+      depth = 0
+    ): Promise<number | null> => {
+      if (depth > 8) return null;
+      const customFormula = mappingConfig?.custom_columns?.[columnKey];
+      if (!customFormula?.base_column) return null;
+
+      const baseKey = customFormula.base_column;
+
+      const fromKnown =
+        baseKey === "price"
+          ? parsePriceValue(product.price)
+          : baseKey === "quantity"
+            ? parsePriceValue(product.quantity)
+            : null;
+      const fromRpcCalculated =
+        product.calculated_data?.[baseKey] != null ? parsePriceValue(product.calculated_data[baseKey]) : null;
+      const fromRpcRaw =
+        product.dynamic_products?.data?.[baseKey] != null
+          ? parsePriceValue(product.dynamic_products.data[baseKey])
+          : product.data?.[baseKey] != null
+            ? parsePriceValue(product.data[baseKey])
+            : null;
+
+      let fromIndexedCalc: number | null = null;
+      let fromLocalDynamic: number | null = null;
+      if (product.product_id) {
+        const indexRecord = await localDB.dynamic_products_index.where("product_id").equals(product.product_id).first();
+        if (indexRecord?.calculated_data?.[baseKey] != null) {
+          fromIndexedCalc = parsePriceValue(indexRecord.calculated_data[baseKey]);
+        }
+        const localProduct = await localDB.dynamic_products.get(product.product_id);
+        if (localProduct?.data?.[baseKey] != null) {
+          fromLocalDynamic = parsePriceValue(localProduct.data[baseKey]);
+        }
+      }
+
+      let fromRemote: number | null = null;
+      if (
+        fromKnown == null &&
+        fromRpcCalculated == null &&
+        fromRpcRaw == null &&
+        fromIndexedCalc == null &&
+        fromLocalDynamic == null &&
+        isOnline &&
+        product.product_id
+      ) {
+        const { data: remoteProduct, error } = await supabase
+          .from("dynamic_products")
+          .select("data")
+          .eq("id", product.product_id)
+          .maybeSingle();
+        if (!error && remoteProduct?.data?.[baseKey] != null) {
+          fromRemote = parsePriceValue(remoteProduct.data[baseKey]);
+        }
+      }
+
+      const fromNestedCustom = await resolveCustomColumnPrice(product, mappingConfig, baseKey, depth + 1);
+      const base =
+        fromKnown ?? fromRpcCalculated ?? fromRpcRaw ?? fromIndexedCalc ?? fromLocalDynamic ?? fromRemote ?? fromNestedCustom;
+      if (base == null) return null;
+
+      const percentage = Number(customFormula.percentage ?? 0);
+      const addVat = Boolean(customFormula.add_vat);
+      const vatRate = Number(customFormula.vat_rate ?? 0);
+
+      let computed = base * (1 + percentage / 100);
+      if (addVat) computed = computed * (1 + vatRate / 100);
+      return computed;
+    };
+
+    const resolveDeliveryNotePrice = async (product: any): Promise<number | null> => {
+      const listId = product?.list_id != null ? String(product.list_id) : null;
+      const mappingConfig = listId ? mappingConfigByListId.get(listId) : undefined;
+      const priceCol = mappingConfig?.delivery_note_price_column;
+      if (!mappingConfig || !priceCol) return null;
+
+      let resolvedPrice: number | null = null;
+
+      if (
+        product.calculated_data &&
+        typeof product.calculated_data === "object" &&
+        Object.keys(product.calculated_data).length > 0 &&
+        product.calculated_data[priceCol] != null
+      ) {
+        resolvedPrice = parsePriceValue(product.calculated_data[priceCol]);
+      }
+
+      if (resolvedPrice == null && product.product_id) {
+        const indexRecord = await localDB.dynamic_products_index.where("product_id").equals(product.product_id).first();
+        if (indexRecord?.calculated_data?.[priceCol] != null) {
+          resolvedPrice = parsePriceValue(indexRecord.calculated_data[priceCol]);
+        }
+      }
+
+      if (resolvedPrice == null) {
+        if (product.dynamic_products?.data?.[priceCol] != null) {
+          resolvedPrice = parsePriceValue(product.dynamic_products.data[priceCol]);
+        } else if (product.data?.[priceCol] != null) {
+          resolvedPrice = parsePriceValue(product.data[priceCol]);
+        }
+      }
+
+      if (resolvedPrice == null && mappingConfig?.custom_columns?.[priceCol]) {
+        resolvedPrice = await resolveCustomColumnPrice(product, mappingConfig, priceCol);
+      }
+
+      if (resolvedPrice == null && product.product_id) {
+        const localProduct = await localDB.dynamic_products.get(product.product_id);
+        resolvedPrice = parsePriceValue(localProduct?.data?.[priceCol]);
+
+        if (resolvedPrice == null && isOnline) {
+          const { data: remoteProduct, error } = await supabase
+            .from("dynamic_products")
+            .select("data")
+            .eq("id", product.product_id)
+            .maybeSingle();
+
+          if (!error && remoteProduct?.data?.[priceCol] != null) {
+            resolvedPrice = parsePriceValue(remoteProduct.data[priceCol]);
+          }
+        }
+      }
+
+      return resolvedPrice;
+    };
+
+    const resolveVisiblePrices = async () => {
+      if (!results.length) return;
+
+      const pending = results
+        .map((product: any) => {
+          const productId = product?.product_id != null ? String(product.product_id) : null;
+          if (!productId) return null;
+          if (displayPricesByProductId[productId] != null) return null;
+          return { productId, product };
+        })
+        .filter(Boolean) as Array<{ productId: string; product: any }>;
+
+      if (!pending.length) return;
+
+      const resolved = await Promise.all(
+        pending.map(async ({ productId, product }) => {
+          const value = await resolveDeliveryNotePrice(product);
+          return { productId, value };
+        })
+      );
+
+      if (cancelled) return;
+
+      const updates: Record<string, number> = {};
+      for (const item of resolved) {
+        if (item.value != null) updates[item.productId] = item.value;
+      }
+      if (Object.keys(updates).length) {
+        setDisplayPricesByProductId((prev) => ({ ...prev, ...updates }));
+      }
+    };
+
+    void resolveVisiblePrices();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [results, mappingConfigByListId, isOnline, displayPricesByProductId]);
 
   const handleSelect = async (product: any) => {
     // Obtener nombre del producto
@@ -230,6 +431,7 @@ const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
 
     onSelect({
       id: product.product_id,
+      listId: product.list_id,
       code: product.code || "SIN-CODIGO",
       name: productName,
       price: productPrice,
@@ -324,7 +526,11 @@ const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
                     )}
                   </div>
                   <div className="text-right">
-                    <p className="font-semibold">{formatARS(product.price || 0)}</p>
+                    <p className="font-semibold">
+                      {formatARS(
+                        displayPricesByProductId[String(product.product_id)] ?? getRemitoDisplayPrice(product)
+                      )}
+                    </p>
                   </div>
                 </div>
               </div>

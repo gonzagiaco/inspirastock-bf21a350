@@ -138,10 +138,10 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
         if (isCancelled) return;
 
         setSample(sampleData ?? []);
-        setColumnSchema((configData?.column_schema as ColumnSchema[]) ?? []);
+        setColumnSchema((configData?.column_schema as unknown as ColumnSchema[]) ?? []);
         const k = new Set<string>();
         (sampleData ?? []).forEach((row) => Object.keys(row.data || {}).forEach((kk) => k.add(kk)));
-        ((configData?.column_schema as ColumnSchema[]) ?? []).forEach((col) => {
+        ((configData?.column_schema as unknown as ColumnSchema[]) ?? []).forEach((col) => {
           if (col?.key) k.add(col.key);
         });
 
