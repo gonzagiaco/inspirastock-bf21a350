@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { 
   Tooltip, 
   TooltipContent, 
@@ -22,24 +23,35 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useDeliveryNotes } from "@/hooks/useDeliveryNotes";
 import { useDeliveryNoteWithItems } from "@/hooks/useDeliveryNoteWithItems";
+import { useDeliveryClients } from "@/hooks/useDeliveryClients";
 import { useToast } from "@/hooks/use-toast";
 import DeliveryNoteDialog from "@/components/DeliveryNoteDialog";
+import ClientDialog from "@/components/ClientDialog";
 import { generateDeliveryNotePDF } from "@/utils/deliveryNotePdfGenerator";
 import { uploadDeliveryNotePDF } from "@/services/pdfStorageService";
-import { Plus, Download, MessageCircle, Trash2, CheckCircle, Edit, Loader2, Receipt, X } from "lucide-react";
+import { Plus, Download, MessageCircle, Trash2, CheckCircle, Edit, Loader2, Receipt, X, Users, History } from "lucide-react";
 import { format } from "date-fns";
 import { formatARS } from "@/utils/numberParser";
-import { DeliveryNote } from "@/types";
+import { DeliveryClient, DeliveryNote } from "@/types";
 import Header from "@/components/Header";
 
 const Remitos = () => {
   const { deliveryNotes, isLoading, deleteDeliveryNote, markAsPaid, isDeleting } = useDeliveryNotes();
+  const { clients, isLoading: isLoadingClients, deleteClient } = useDeliveryClients();
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [prefillClientId, setPrefillClientId] = useState<string | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [noteToDelete, setNoteToDelete] = useState<string | null>(null);
   const [isSendingWhatsApp, setIsSendingWhatsApp] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"remitos" | "clientes">("remitos");
+  const [clientSearchQuery, setClientSearchQuery] = useState("");
+  const [clientFilterId, setClientFilterId] = useState<string | null>(null);
+  const [clientToEdit, setClientToEdit] = useState<DeliveryClient | null>(null);
+  const [isClientDialogOpen, setIsClientDialogOpen] = useState(false);
+  const [clientToDelete, setClientToDelete] = useState<DeliveryClient | null>(null);
+  const [isDeleteClientDialogOpen, setIsDeleteClientDialogOpen] = useState(false);
 
   // Hook para obtener el remito con items (funciona offline)
   const { data: editingNoteData, isLoading: isLoadingEditNote } = useDeliveryNoteWithItems(
@@ -51,6 +63,7 @@ const Remitos = () => {
   useEffect(() => {
     if (!isDialogOpen) {
       setEditingNoteId(null);
+      setPrefillClientId(null);
     }
   }, [isDialogOpen]);
 
@@ -62,6 +75,7 @@ const Remitos = () => {
   const filteredNotes = deliveryNotes.filter((note) => {
     const matchesSearch = note.customerName.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesStatus = statusFilter === "all" || note.status === statusFilter;
+    const matchesClient = !clientFilterId || note.clientId === clientFilterId;
 
     let matchesDate = true;
     if (dateFrom) {
@@ -71,8 +85,35 @@ const Remitos = () => {
       matchesDate = matchesDate && new Date(note.issueDate) <= new Date(dateTo);
     }
 
-    return matchesSearch && matchesStatus && matchesDate;
+    return matchesSearch && matchesStatus && matchesDate && matchesClient;
   });
+
+  const clientNoteCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    deliveryNotes.forEach((note) => {
+      if (!note.clientId) return;
+      map.set(note.clientId, (map.get(note.clientId) || 0) + 1);
+    });
+    return map;
+  }, [deliveryNotes]);
+
+  const filteredClients = useMemo(() => {
+    const query = clientSearchQuery.trim().toLowerCase();
+    if (!query) return clients;
+    return clients.filter((client) => {
+      const nameMatch = client.name.toLowerCase().includes(query);
+      const phoneMatch = (client.phone || "").includes(query);
+      const addressMatch = (client.address || "").toLowerCase().includes(query);
+      return nameMatch || phoneMatch || addressMatch;
+    });
+  }, [clients, clientSearchQuery]);
+
+  const selectedClientFilter = useMemo(
+    () => clients.find((client) => client.id === clientFilterId) || null,
+    [clients, clientFilterId],
+  );
+
+  const clientDeleteCount = clientToDelete ? clientNoteCounts.get(clientToDelete.id) || 0 : 0;
 
   const handleExportPDF = (note: DeliveryNote) => {
     generateDeliveryNotePDF(note);
@@ -167,6 +208,25 @@ const Remitos = () => {
     await markAsPaid(id);
   };
 
+  const handleOpenNewNote = (clientId?: string | null) => {
+    setEditingNoteId(null);
+    setPrefillClientId(clientId || null);
+    setIsDialogOpen(true);
+  };
+
+  const handleShowClientHistory = (clientId: string) => {
+    setClientFilterId(clientId);
+    setActiveTab("remitos");
+    setSearchQuery("");
+  };
+
+  const handleConfirmDeleteClient = async () => {
+    if (!clientToDelete) return;
+    await deleteClient(clientToDelete.id);
+    setClientToDelete(null);
+    setIsDeleteClientDialogOpen(false);
+  };
+
   return (
     <div className="p-4 lg:px-4 lg:py-10 flex-1 overflow-auto">
       <div className="">
@@ -178,19 +238,30 @@ const Remitos = () => {
       </div>
 
       <div className="space-y-6">
-        <div className="flex justify-between items-center">
-          <Button
-            onClick={() => {
-              setEditingNoteId(null);
-              setIsDialogOpen(true);
-            }}
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Nuevo Remito
-          </Button>
-        </div>
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => setActiveTab(value as "remitos" | "clientes")}
+          className="space-y-6"
+        >
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <TabsList className="grid w-full grid-cols-2 lg:w-auto">
+              <TabsTrigger value="remitos" className="gap-2">
+                <Receipt className="h-4 w-4" />
+                Remitos
+              </TabsTrigger>
+              <TabsTrigger value="clientes" className="gap-2">
+                <Users className="h-4 w-4" />
+                Clientes
+              </TabsTrigger>
+            </TabsList>
+            <Button onClick={() => handleOpenNewNote()}>
+              <Plus className="mr-2 h-4 w-4" />
+              Nuevo Remito
+            </Button>
+          </div>
 
-        <Card>
+          <TabsContent value="remitos" className="space-y-6">
+            <Card>
           <CardHeader>
             <CardTitle>Filtros</CardTitle>
           </CardHeader>
@@ -239,6 +310,16 @@ const Remitos = () => {
             </div>
           </CardContent>
         </Card>
+
+        {clientFilterId && selectedClientFilter && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Cliente: {selectedClientFilter.name}</Badge>
+            <Button variant="ghost" size="sm" onClick={() => setClientFilterId(null)}>
+              <X className="mr-1 h-4 w-4" />
+              Limpiar
+            </Button>
+          </div>
+        )}
 
         {isLoading ? (
           <p>Cargando remitos...</p>
@@ -381,6 +462,104 @@ const Remitos = () => {
             </div>
           </TooltipProvider>
         )}
+          </TabsContent>
+
+          <TabsContent value="clientes" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Clientes</CardTitle>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                <div className="space-y-1">
+                  <span className="text-sm font-medium">Buscar</span>
+                  <div className="relative">
+                    <Input
+                      placeholder="Buscar por nombre, telefono o direccion..."
+                      value={clientSearchQuery}
+                      onChange={(e) => setClientSearchQuery(e.target.value)}
+                      className="pr-10"
+                    />
+                    {clientSearchQuery.trim().length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setClientSearchQuery("")}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[#7588eb]"
+                        aria-label="Limpiar busqueda"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="text-sm text-muted-foreground md:text-right">
+                  Total: <span className="font-medium text-foreground">{clients.length}</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {isLoadingClients ? (
+              <p>Cargando clientes...</p>
+            ) : filteredClients.length === 0 ? (
+              <Card>
+                <CardContent className="pt-6 text-center text-muted-foreground">No se encontraron clientes.</CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-4">
+                {filteredClients.map((client) => (
+                  <Card key={client.id}>
+                    <CardContent className="pt-6">
+                      <div className="flex flex-col lg:flex-row justify-between items-start gap-4">
+                        <div className="space-y-1 flex-1 min-w-0">
+                          <div className="flex items-center gap-3">
+                            <h3 className="text-lg font-semibold">{client.name}</h3>
+                            {clientNoteCounts.get(client.id) ? (
+                              <Badge variant="secondary">{clientNoteCounts.get(client.id)} remito(s)</Badge>
+                            ) : null}
+                          </div>
+                          {client.phone && <p className="text-sm">Tel: {client.phone}</p>}
+                          {client.address && <p className="text-sm">{client.address}</p>}
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 justify-end items-start">
+                          <Button size="sm" variant="outline" onClick={() => handleOpenNewNote(client.id)}>
+                            <Plus className="h-4 w-4" />
+                            <span className="ml-2 hidden sm:inline">Nuevo remito</span>
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => handleShowClientHistory(client.id)}>
+                            <History className="h-4 w-4" />
+                            <span className="ml-2 hidden sm:inline">Historial</span>
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setClientToEdit(client);
+                              setIsClientDialogOpen(true);
+                            }}
+                          >
+                            <Edit className="h-4 w-4" />
+                            <span className="ml-2 hidden sm:inline">Editar</span>
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => {
+                              setClientToDelete(client);
+                              setIsDeleteClientDialogOpen(true);
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            <span className="ml-2 hidden sm:inline">Eliminar</span>
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
 
         <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
           <AlertDialogContent>
@@ -410,11 +589,49 @@ const Remitos = () => {
           </AlertDialogContent>
         </AlertDialog>
 
+        <AlertDialog
+          open={isDeleteClientDialogOpen}
+          onOpenChange={(open) => {
+            setIsDeleteClientDialogOpen(open);
+            if (!open) setClientToDelete(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Eliminar cliente?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {clientDeleteCount > 0
+                  ? `Este cliente tiene ${clientDeleteCount} remito(s). Se mantendran los datos en los remitos, pero quedaran sin cliente asociado.`
+                  : "Esta accion eliminara el cliente. Esta operacion no se puede deshacer."}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={() => setClientToDelete(null)}>Cancelar</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleConfirmDeleteClient}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                Eliminar
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
         <DeliveryNoteDialog 
           open={isDialogOpen} 
           onOpenChange={setIsDialogOpen} 
           note={editingNoteData?.note || undefined}
           isLoadingNote={isLoadingEditNote && !!editingNoteId}
+          initialClientId={prefillClientId}
+        />
+
+        <ClientDialog
+          open={isClientDialogOpen}
+          onOpenChange={(open) => {
+            setIsClientDialogOpen(open);
+            if (!open) setClientToEdit(null);
+          }}
+          client={clientToEdit || undefined}
         />
       </div>
     </div>

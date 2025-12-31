@@ -4,11 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { DeliveryNote, CreateDeliveryNoteInput } from "@/types";
 import { useDeliveryNotes } from "@/hooks/useDeliveryNotes";
+import { useDeliveryClients } from "@/hooks/useDeliveryClients";
 import DeliveryNoteProductSearch from "./DeliveryNoteProductSearch";
 import { X, Plus, Minus, Loader2 } from "lucide-react";
 import { formatARS } from "@/utils/numberParser";
@@ -32,6 +34,7 @@ interface DeliveryNoteDialogProps {
   onOpenChange: (open: boolean) => void;
   note?: DeliveryNote;
   isLoadingNote?: boolean;
+  initialClientId?: string | null;
 }
 
 interface CartItem {
@@ -42,15 +45,43 @@ interface CartItem {
   unitPrice: number;
 }
 
-const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false }: DeliveryNoteDialogProps) => {
+const DeliveryNoteDialog = ({
+  open,
+  onOpenChange,
+  note,
+  isLoadingNote = false,
+  initialClientId,
+}: DeliveryNoteDialogProps) => {
   const { createDeliveryNote, updateDeliveryNote } = useDeliveryNotes();
+  const { clients, createClient } = useDeliveryClients();
   const [items, setItems] = useState<CartItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [clientMode, setClientMode] = useState<"new" | "existing">("new");
+  const [clientSearch, setClientSearch] = useState("");
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
 
   const { register, handleSubmit, formState: { errors }, reset, setValue } = useForm({
     resolver: zodResolver(deliveryNoteSchema),
   });
+
+  const selectedClient = useMemo(
+    () => clients.find((client) => client.id === selectedClientId) || null,
+    [clients, selectedClientId],
+  );
+
+  const lockCustomerFields = clientMode === "existing" || !!note?.clientId;
+
+  const filteredClients = useMemo(() => {
+    const query = clientSearch.trim().toLowerCase();
+    if (!query) return clients;
+
+    return clients.filter((client) => {
+      const nameMatch = client.name.toLowerCase().includes(query);
+      const phoneMatch = (client.phone || "").includes(query);
+      return nameMatch || phoneMatch;
+    });
+  }, [clients, clientSearch]);
 
   const reservedQuantities = useMemo(() => {
     const map = new Map<string, number>();
@@ -66,6 +97,17 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false }:
     productId ? reservedQuantities.get(productId) ?? 0 : 0;
 
   useEffect(() => {
+    if (clientMode !== "existing" || !selectedClient) return;
+
+    setValue("customerName", selectedClient.name);
+    setValue("customerAddress", selectedClient.address || "");
+    setValue("customerPhone", selectedClient.phone || "");
+    setPhoneNumber(selectedClient.phone || "");
+  }, [clientMode, selectedClient, setValue]);
+
+  useEffect(() => {
+    if (!open) return;
+
     if (note) {
       setValue("customerName", note.customerName);
       setValue("customerAddress", note.customerAddress || "");
@@ -74,19 +116,34 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false }:
       setValue("issueDate", note.issueDate.split("T")[0]);
       setValue("paidAmount", note.paidAmount);
       setValue("notes", note.notes || "");
-      
-      setItems(note.items?.map(item => ({
-        productId: item.productId,
-        productCode: item.productCode,
-        productName: item.productName,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-      })) || []);
+
+      setClientMode(note.clientId ? "existing" : "new");
+      setSelectedClientId(note.clientId || null);
+      setClientSearch("");
+
+      setItems(
+        note.items?.map((item) => ({
+          productId: item.productId,
+          productCode: item.productCode,
+          productName: item.productName,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+        })) || [],
+      );
     } else {
       reset();
       setItems([]);
+      setClientSearch("");
+
+      if (initialClientId) {
+        setClientMode("existing");
+        setSelectedClientId(initialClientId);
+      } else {
+        setClientMode("new");
+        setSelectedClientId(null);
+      }
     }
-  }, [note, setValue, reset]);
+  }, [note, open, initialClientId, setValue, reset]);
 
   const handleAddProduct = async (product: { id?: string; code: string; name: string; price: number }) => {
     // 🔧 NUEVO: Validar stock disponible
@@ -235,18 +292,51 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false }:
       return;
     }
 
-    const input: CreateDeliveryNoteInput = {
-      customerName: data.customerName,
-      customerAddress: data.customerAddress,
-      customerPhone: data.customerPhone,
-      issueDate: data.issueDate || new Date().toISOString(),
-      paidAmount: data.paidAmount || 0,
-      notes: data.notes,
-      items,
-    };
+    const isEditing = !!note;
+    let resolvedClientId: string | null = null;
+    let resolvedName = data.customerName;
+    let resolvedPhone = data.customerPhone;
+    let resolvedAddress = data.customerAddress;
 
     try {
       setIsSubmitting(true);
+
+      if (clientMode === "existing") {
+        const fallbackClientId = selectedClient?.id || note?.clientId || null;
+        if (!fallbackClientId) {
+          toast.error("Debes seleccionar un cliente existente");
+          return;
+        }
+
+        resolvedClientId = fallbackClientId;
+        resolvedName = selectedClient?.name || resolvedName;
+        resolvedPhone = selectedClient?.phone || resolvedPhone;
+        resolvedAddress = selectedClient?.address || resolvedAddress;
+      } else if (!isEditing) {
+        const createdClient = await createClient({
+          name: data.customerName,
+          phone: data.customerPhone || null,
+          address: data.customerAddress || null,
+        });
+
+        resolvedClientId = createdClient.id;
+        resolvedName = createdClient.name;
+        resolvedPhone = createdClient.phone || resolvedPhone;
+        resolvedAddress = createdClient.address || resolvedAddress;
+      } else {
+        resolvedClientId = note?.clientId || null;
+      }
+
+      const input: CreateDeliveryNoteInput = {
+        clientId: resolvedClientId,
+        customerName: resolvedName,
+        customerAddress: resolvedAddress,
+        customerPhone: resolvedPhone,
+        issueDate: data.issueDate || new Date().toISOString(),
+        paidAmount: data.paidAmount || 0,
+        notes: data.notes,
+        items,
+      };
 
       if (note) {
         await updateDeliveryNote({ id: note.id, ...input });
@@ -287,10 +377,91 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false }:
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+          <div className="space-y-3">
+            <Label>Cliente</Label>
+            <Tabs value={clientMode} onValueChange={(value) => setClientMode(value as "new" | "existing")}>
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="new" disabled={!!note?.clientId}>
+                  Nuevo
+                </TabsTrigger>
+                <TabsTrigger value="existing">Existente</TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            {clientMode === "existing" && (
+              <div className="space-y-2">
+                {selectedClient ? (
+                  <div className="flex items-start justify-between gap-4 rounded-md border p-3">
+                    <div>
+                      <p className="text-sm font-medium">{selectedClient.name}</p>
+                      {selectedClient.phone && (
+                        <p className="text-xs text-muted-foreground">Tel: {selectedClient.phone}</p>
+                      )}
+                      {selectedClient.address && (
+                        <p className="text-xs text-muted-foreground">Dir: {selectedClient.address}</p>
+                      )}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setSelectedClientId(null);
+                        setClientSearch("");
+                      }}
+                    >
+                      Cambiar
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <Input
+                      placeholder="Buscar cliente por nombre o telefono..."
+                      value={clientSearch}
+                      onChange={(e) => setClientSearch(e.target.value)}
+                    />
+                    {clientSearch.trim().length >= 2 && (
+                      <div className="border rounded-md max-h-48 overflow-y-auto divide-y">
+                        {filteredClients.length === 0 ? (
+                          <p className="p-3 text-sm text-muted-foreground">No se encontraron clientes</p>
+                        ) : (
+                          filteredClients.map((client) => (
+                            <button
+                              key={client.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedClientId(client.id);
+                                setClientSearch("");
+                              }}
+                              className="w-full text-left p-3 hover:bg-accent transition-colors"
+                            >
+                              <p className="text-sm font-medium">{client.name}</p>
+                              {client.phone && (
+                                <p className="text-xs text-muted-foreground">Tel: {client.phone}</p>
+                              )}
+                              {client.address && (
+                                <p className="text-xs text-muted-foreground">Dir: {client.address}</p>
+                              )}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <Label htmlFor="customerName">Nombre del Cliente *</Label>
-              <Input id="customerName" {...register("customerName")} />
+              <Input
+                id="customerName"
+                readOnly={lockCustomerFields}
+                className={lockCustomerFields ? "bg-muted" : ""}
+                {...register("customerName")}
+              />
               {errors.customerName && (
                 <p className="text-sm text-red-500">{errors.customerName.message as string}</p>
               )}
@@ -307,7 +478,10 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false }:
                   type="tel"
                   maxLength={10}
                   value={phoneNumber.replace("+54", "")}
+                  readOnly={lockCustomerFields}
+                  className={lockCustomerFields ? "bg-muted" : ""}
                   onChange={(e) => {
+                    if (lockCustomerFields) return;
                     const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
                     const fullNumber = digits ? `+54${digits}` : "";
                     setPhoneNumber(fullNumber);
@@ -323,7 +497,12 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false }:
 
           <div>
             <Label htmlFor="customerAddress">Dirección</Label>
-            <Input id="customerAddress" {...register("customerAddress")} />
+            <Input
+              id="customerAddress"
+              readOnly={lockCustomerFields}
+              className={lockCustomerFields ? "bg-muted" : ""}
+              {...register("customerAddress")}
+            />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

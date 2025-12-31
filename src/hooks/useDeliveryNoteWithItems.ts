@@ -45,6 +45,7 @@ export function useDeliveryNoteWithItems(noteId: string | null, enabled: boolean
         const note: DeliveryNote = {
           id: noteData.id,
           userId: noteData.user_id,
+          clientId: noteData.client_id,
           customerName: noteData.customer_name,
           customerAddress: noteData.customer_address,
           customerPhone: noteData.customer_phone,
@@ -94,6 +95,7 @@ export function useDeliveryNoteWithItems(noteId: string | null, enabled: boolean
         await localDB.delivery_notes.put({
           id: data.id,
           user_id: data.user_id,
+          client_id: data.client_id,
           customer_name: data.customer_name,
           customer_address: data.customer_address,
           customer_phone: data.customer_phone,
@@ -138,6 +140,7 @@ export function useDeliveryNoteWithItems(noteId: string | null, enabled: boolean
       const note: DeliveryNote = {
         id: data.id,
         userId: data.user_id,
+        clientId: data.client_id,
         customerName: data.customer_name,
         customerAddress: data.customer_address,
         customerPhone: data.customer_phone,

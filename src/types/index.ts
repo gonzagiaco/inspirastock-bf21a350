@@ -52,6 +52,15 @@ export interface Client {
   issueDate: string;
 }
 
+export interface DeliveryClient {
+  id: string;
+  name: string;
+  phone?: string;
+  address?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Supplier {
   id: string;
   name: string;
@@ -73,6 +82,7 @@ export type QuantityFilter = "Cualquiera" | "< 100" | "100 - 200" | "> 200" | "B
 export interface DeliveryNote {
   id: string;
   userId: string;
+  clientId?: string | null;
   customerName: string;
   customerAddress?: string;
   customerPhone?: string;
@@ -101,6 +111,7 @@ export interface DeliveryNoteItem {
 }
 
 export interface CreateDeliveryNoteInput {
+  clientId?: string | null;
   customerName: string;
   customerAddress?: string;
   customerPhone?: string;

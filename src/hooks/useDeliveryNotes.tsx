@@ -87,6 +87,7 @@ export const useDeliveryNotes = () => {
         return (offlineNotes || []).map((note) => ({
           id: note.id,
           userId: note.user_id,
+          clientId: note.client_id,
           customerName: note.customer_name,
           customerAddress: note.customer_address,
           customerPhone: note.customer_phone,
@@ -130,6 +131,7 @@ export const useDeliveryNotes = () => {
       return data.map((note) => ({
         id: note.id,
         userId: note.user_id,
+        clientId: note.client_id,
         customerName: note.customer_name,
         customerAddress: note.customer_address,
         customerPhone: note.customer_phone,
@@ -169,6 +171,7 @@ export const useDeliveryNotes = () => {
       if (!isOnline) {
         const noteData = {
           user_id: user.user.id,
+          client_id: input.clientId ?? null,
           customer_name: input.customerName,
           customer_address: input.customerAddress,
           customer_phone: input.customerPhone,
@@ -201,6 +204,7 @@ export const useDeliveryNotes = () => {
         .from("delivery_notes")
         .insert({
           user_id: user.user.id,
+          client_id: input.clientId ?? null,
           customer_name: input.customerName,
           customer_address: input.customerAddress,
           customer_phone: input.customerPhone,
@@ -273,7 +277,18 @@ export const useDeliveryNotes = () => {
           subtotal: item.quantity * item.unitPrice,
         }));
 
-        await updateDeliveryNoteOffline(id, updates, mappedItems);
+        const offlineUpdates: any = {};
+
+        if (updates.clientId !== undefined) offlineUpdates.client_id = updates.clientId;
+        if (updates.customerName !== undefined) offlineUpdates.customer_name = updates.customerName;
+        if (updates.customerAddress !== undefined) offlineUpdates.customer_address = updates.customerAddress;
+        if (updates.customerPhone !== undefined) offlineUpdates.customer_phone = updates.customerPhone;
+        if (updates.issueDate !== undefined) offlineUpdates.issue_date = updates.issueDate;
+        if (updates.paidAmount !== undefined) offlineUpdates.paid_amount = updates.paidAmount;
+        if (updates.notes !== undefined) offlineUpdates.notes = updates.notes;
+        if (updates.extraFields !== undefined) offlineUpdates.extra_fields = updates.extraFields;
+
+        await updateDeliveryNoteOffline(id, offlineUpdates, mappedItems);
         return;
       }
 
@@ -327,20 +342,23 @@ export const useDeliveryNotes = () => {
       // 🔧 Convertir fecha a mediodía UTC si se proporciona
       const issueDate = updates.issueDate ? `${updates.issueDate}T12:00:00.000Z` : undefined;
 
-      const { error: noteError } = await supabase
-        .from("delivery_notes")
-        .update({
-          customer_name: updates.customerName,
-          customer_address: updates.customerAddress,
-          customer_phone: updates.customerPhone,
-          issue_date: issueDate,
-          total_amount: newTotal,
-          paid_amount: newPaidAmount,
-          notes: updates.notes,
-          status: newStatus,
-          // remaining_balance es columna generada, no se actualiza directamente
-        })
-        .eq("id", id);
+      const noteUpdate: any = {
+        customer_name: updates.customerName,
+        customer_address: updates.customerAddress,
+        customer_phone: updates.customerPhone,
+        issue_date: issueDate,
+        total_amount: newTotal,
+        paid_amount: newPaidAmount,
+        notes: updates.notes,
+        status: newStatus,
+        // remaining_balance es columna generada, no se actualiza directamente
+      };
+
+      if (updates.clientId !== undefined) {
+        noteUpdate.client_id = updates.clientId;
+      }
+
+      const { error: noteError } = await supabase.from("delivery_notes").update(noteUpdate).eq("id", id);
 
       if (noteError) throw noteError;
 

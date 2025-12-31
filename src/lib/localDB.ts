@@ -25,6 +25,16 @@ interface SupplierDB {
   updated_at: string;
 }
 
+interface ClientDB {
+  id: string;
+  user_id: string;
+  name: string;
+  phone?: string | null;
+  address?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface ProductListDB {
   id: string;
   user_id: string;
@@ -85,6 +95,7 @@ interface MyStockProductDB {
 interface DeliveryNoteDB {
   id: string;
   user_id: string;
+  client_id?: string | null;
   customer_name: string;
   customer_address?: string;
   customer_phone?: string;
@@ -169,6 +180,7 @@ interface StockCompensationDB {
 
 class LocalDatabase extends Dexie {
   suppliers!: Table<SupplierDB, string>;
+  clients!: Table<ClientDB, string>;
   product_lists!: Table<ProductListDB, string>;
   dynamic_products_index!: Table<DynamicProductIndexDB, string>;
   dynamic_products!: Table<DynamicProductDB, string>;
@@ -286,6 +298,25 @@ class LocalDatabase extends Dexie {
       id_mappings: "temp_id, real_id, table_name",
       stock_compensations: "++id, operation_id, product_id",
     });
+
+    // Version 10: agregar clientes y soporte de client_id en remitos
+    this.version(10).stores({
+      suppliers: "id, user_id, name",
+      clients: "id, user_id, name",
+      product_lists: "id, user_id, supplier_id, name",
+      dynamic_products_index: "id, user_id, list_id, product_id, code, name, in_my_stock, stock_threshold",
+      dynamic_products: "id, user_id, list_id, code, name, stock_threshold",
+      my_stock_products: "id, user_id, product_id, quantity, stock_threshold, code, name, price",
+      delivery_notes: "id, user_id, client_id, customer_name, status, issue_date",
+      delivery_note_items: "id, delivery_note_id, product_id",
+      settings: "key, updated_at",
+      request_items: "id, user_id, product_id",
+      stock_items: "id, user_id, code, name, category, supplier_id",
+      pending_operations: "++id, table_name, timestamp, record_id, product_id, operation_type, [table_name+record_id+operation_type]",
+      tokens: "userId, updatedAt",
+      id_mappings: "temp_id, real_id, table_name",
+      stock_compensations: "++id, operation_id, product_id",
+    });
   }
 }
 
@@ -295,6 +326,7 @@ export const localDB = new LocalDatabase();
 
 const SYNC_ORDER = [
   "suppliers",
+  "clients",
   "product_lists",
   "dynamic_products",
   "dynamic_products_index",
@@ -389,6 +421,23 @@ export async function syncFromSupabase(): Promise<void> {
         console.log(`âœ… ${suppliers.length} proveedores sincronizados`);
       } else {
         console.log("âœ… 0 proveedores sincronizados (tabla vacÃ­a)");
+      }
+    }
+
+    // Sincronizar clients
+    const { data: clients, error: clientsError } = await supabase
+      .from("clients")
+      .select("*")
+      .eq("user_id", user.id);
+    if (clientsError) throw clientsError;
+
+    if (clients !== undefined) {
+      await localDB.clients.clear(); // limpia clientes viejos
+      if (clients.length > 0) {
+        await localDB.clients.bulkAdd(clients as ClientDB[]);
+        console.log(`ƒo. ${clients.length} clientes sincronizados`);
+      } else {
+        console.log("ƒo. 0 clientes sincronizados (tabla vacia)");
       }
     }
 
@@ -755,6 +804,17 @@ async function updateLocalRecordId(tableName: string, tempId: string, realId: st
       // Insertar con el ID real
       await localDB.delivery_note_items.put({ ...item, id: realId });
     }
+  } else if (tableName === "clients") {
+    const client = await localDB.clients.get(tempId);
+    if (client) {
+      await localDB.clients.delete(tempId);
+      await localDB.clients.put({ ...client, id: realId });
+
+      const affectedNotes = await localDB.delivery_notes.where("client_id").equals(tempId).toArray();
+      for (const note of affectedNotes) {
+        await localDB.delivery_notes.update(note.id, { client_id: realId });
+      }
+    }
   }
 }
 
@@ -896,6 +956,15 @@ async function executeOperation(op: PendingOperation): Promise<"success" | "skip
     delete insertData.id; // Supabase genera el UUID
     delete insertData._snapshot; // Eliminar snapshot interno
 
+    if (op.table_name === "delivery_notes" && insertData.client_id) {
+      const realClientId = await resolveRecordId("clients", insertData.client_id);
+      if (isTempId(realClientId)) {
+        console.log(`Remito depende de cliente no sincronizado: ${insertData.client_id}`);
+        return "skipped";
+      }
+      insertData.client_id = realClientId;
+    }
+
     // Para delivery_note_items, resolver delivery_note_id temporal
     if (op.table_name === "delivery_note_items" && insertData.delivery_note_id) {
       const realNoteId = await resolveRecordId("delivery_notes", insertData.delivery_note_id);
@@ -937,6 +1006,15 @@ async function executeOperation(op: PendingOperation): Promise<"success" | "skip
     // Preparar datos de actualizaciÃ³n (remover campos internos)
     let updateData = { ...op.data };
     delete updateData._snapshot;
+
+    if (op.table_name === "delivery_notes" && updateData.client_id) {
+      const realClientId = await resolveRecordId("clients", updateData.client_id);
+      if (isTempId(realClientId)) {
+        console.log(`UPDATE depende de cliente no sincronizado: ${updateData.client_id}`);
+        return "skipped";
+      }
+      updateData.client_id = realClientId;
+    }
 
     // Para delivery_note_items, resolver delivery_note_id temporal
     if (op.table_name === "delivery_note_items" && updateData.delivery_note_id) {
@@ -1244,6 +1322,107 @@ export async function createSupplierOffline(
   await queueOperation("suppliers", "INSERT", tempId, newSupplier);
 
   return tempId;
+}
+
+// CLIENTS
+export async function updateDeliveryNotesForClientLocal(
+  clientId: string,
+  updates: { customer_name: string; customer_phone?: string | null; customer_address?: string | null },
+  options: { enqueue?: boolean } = {},
+): Promise<void> {
+  const now = new Date().toISOString();
+  const notes = await localDB.delivery_notes.where("client_id").equals(clientId).toArray();
+
+  for (const note of notes) {
+    const noteUpdate = {
+      customer_name: updates.customer_name,
+      customer_phone: updates.customer_phone ?? null,
+      customer_address: updates.customer_address ?? null,
+      updated_at: now,
+    };
+
+    await localDB.delivery_notes.update(note.id, noteUpdate);
+    if (options.enqueue) {
+      await queueOperation("delivery_notes", "UPDATE", note.id, noteUpdate);
+    }
+  }
+}
+
+export async function detachClientFromDeliveryNotesLocal(clientId: string): Promise<void> {
+  const now = new Date().toISOString();
+  const notes = await localDB.delivery_notes.where("client_id").equals(clientId).toArray();
+
+  for (const note of notes) {
+    await localDB.delivery_notes.update(note.id, { client_id: null, updated_at: now });
+  }
+}
+
+export async function createClientOffline(client: {
+  name: string;
+  phone?: string | null;
+  address?: string | null;
+}): Promise<ClientDB> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Usuario no autenticado");
+
+  const tempId = generateTempId();
+  const now = new Date().toISOString();
+
+  const newClient: ClientDB = {
+    id: tempId,
+    user_id: user.id,
+    name: client.name,
+    phone: client.phone ?? null,
+    address: client.address ?? null,
+    created_at: now,
+    updated_at: now,
+  };
+
+  await localDB.clients.add(newClient);
+  await queueOperation("clients", "INSERT", tempId, newClient);
+
+  return newClient;
+}
+
+export async function updateClientOffline(
+  clientId: string,
+  updates: { name?: string; phone?: string | null; address?: string | null },
+): Promise<void> {
+  const existing = await localDB.clients.get(clientId);
+  if (!existing) throw new Error("Cliente no encontrado");
+
+  const now = new Date().toISOString();
+  const updateData = {
+    name: updates.name ?? existing.name,
+    phone: updates.phone ?? existing.phone ?? null,
+    address: updates.address ?? existing.address ?? null,
+    updated_at: now,
+  };
+
+  await localDB.clients.update(clientId, updateData);
+  await queueOperation("clients", "UPDATE", clientId, updateData);
+
+  await updateDeliveryNotesForClientLocal(
+    clientId,
+    {
+      customer_name: updateData.name,
+      customer_phone: updateData.phone,
+      customer_address: updateData.address,
+    },
+    { enqueue: true },
+  );
+}
+
+export async function deleteClientOffline(clientId: string): Promise<void> {
+  const existing = await localDB.clients.get(clientId);
+  if (!existing) throw new Error("Cliente no encontrado");
+
+  await localDB.clients.delete(clientId);
+  await queueOperation("clients", "DELETE", clientId, {});
+
+  await detachClientFromDeliveryNotesLocal(clientId);
 }
 
 // PRODUCT LISTS
@@ -1844,6 +2023,7 @@ export async function updateDeliveryNoteOffline(
   // Esta operaciÃ³n incluye la nota y todos los items para sincronizaciÃ³n atÃ³mica
   const syncData = {
     // Datos para actualizar en Supabase
+    client_id: updates.client_id ?? existing.client_id,
     customer_name: updates.customer_name ?? existing.customer_name,
     customer_address: updates.customer_address ?? existing.customer_address,
     customer_phone: updates.customer_phone ?? existing.customer_phone,
@@ -2698,6 +2878,8 @@ export async function getOfflineData<T>(tableName: string): Promise<T[]> {
   switch (tableName) {
     case "suppliers":
       return (await localDB.suppliers.toArray()) as any;
+    case "clients":
+      return (await localDB.clients.toArray()) as any;
     case "product_lists":
       return (await localDB.product_lists.toArray()) as any;
     case "dynamic_products_index":
