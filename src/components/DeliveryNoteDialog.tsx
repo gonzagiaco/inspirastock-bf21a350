@@ -419,13 +419,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
       return;
     }
 
-    const isEditing = !!note;
-    let resolvedClientId: string | null = null;
-    let resolvedName = data.customerName;
-    let resolvedPhone = data.customerPhone;
-    let resolvedAddress = data.customerAddress;
-
-    const input: CreateDeliveryNoteInput = {
+    const baseInput: CreateDeliveryNoteInput = {
       customerName: data.customerName,
       customerAddress: data.customerAddress,
       customerPhone: data.customerPhone,
@@ -441,15 +435,20 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
       })),
     };
 
+    const isEditing = !!note;
+    let resolvedClientId: string | null = note?.clientId ?? null;
+    let resolvedName = data.customerName;
+    let resolvedPhone = data.customerPhone;
+    let resolvedAddress = data.customerAddress;
+
     try {
       setIsSubmitting(true);
-      if (note) await updateDeliveryNote({ id: note.id, ...input });
-      else await createDeliveryNote(input);
 
       if (clientMode === "existing") {
         const fallbackClientId = selectedClient?.id || note?.clientId || null;
         if (!fallbackClientId) {
           toast.error("Debes seleccionar un cliente existente");
+          setIsSubmitting(false);
           return;
         }
 
@@ -468,21 +467,20 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
         resolvedName = createdClient.name;
         resolvedPhone = createdClient.phone || resolvedPhone;
         resolvedAddress = createdClient.address || resolvedAddress;
-      } else {
-        resolvedClientId = note?.clientId || null;
       }
 
-      input.clientId = resolvedClientId;
-      input.customerName = resolvedName;
-      input.customerAddress = resolvedAddress;
-      input.customerPhone = resolvedPhone;
-      input.items = items;
+      const finalInput: CreateDeliveryNoteInput = {
+        ...baseInput,
+        clientId: resolvedClientId,
+        customerName: resolvedName,
+        customerAddress: resolvedAddress,
+        customerPhone: resolvedPhone,
+        items,
+      };
 
-      if (note) {
-        await updateDeliveryNote({ id: note.id, ...input });
-      } else {
-        await createDeliveryNote(input);
-      }
+      if (note) await updateDeliveryNote({ id: note.id, ...finalInput });
+      else await createDeliveryNote(finalInput);
+
       onOpenChange(false);
       reset();
       setPhoneNumber("");

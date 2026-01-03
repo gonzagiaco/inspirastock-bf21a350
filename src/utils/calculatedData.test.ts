@@ -5,7 +5,7 @@ function calculatePriceWithModifiers(
   baseValue: any,
   percentage = 0,
   addVat = false,
-  vatRate = 21
+  vatRate = 21,
 ): number | null {
   const parsed = normalizeRawPrice(baseValue);
   if (parsed === null) return null;
