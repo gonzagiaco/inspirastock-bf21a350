@@ -10,7 +10,6 @@ import {
   markDeliveryNoteAsPaidOffline,
   getOfflineData,
   syncDeliveryNoteById,
-  localDB,
 } from "@/lib/localDB";
 import { bulkAdjustStock, prepareDeliveryNoteAdjustments, calculateNetStockAdjustments } from "@/services/bulkStockService";
 
@@ -19,6 +18,22 @@ const logDelivery = (action: string, details?: any) => {
   const timestamp = new Date().toISOString();
   console.log(`[DeliveryNotes ${timestamp}] ${action}`, details || "");
 };
+
+const calculateItemsTotal = (
+  items: Array<{
+    quantity?: number;
+    unit_price?: number;
+    unitPrice?: number;
+    subtotal?: number | null;
+  }>,
+) =>
+  items.reduce((sum, item) => {
+    const quantity = Number(item.quantity || 0);
+    const unitPrice = Number(item.unit_price ?? item.unitPrice);
+    const subtotal = item.subtotal != null ? Number(item.subtotal) : NaN;
+    const lineTotal = Number.isFinite(unitPrice) ? quantity * unitPrice : Number.isFinite(subtotal) ? subtotal : 0;
+    return sum + (Number.isFinite(lineTotal) ? lineTotal : 0);
+  }, 0);
 
 /**
  * C) OPTIMIZADO: Actualiza stock usando bulk RPC
@@ -481,22 +496,35 @@ export const useDeliveryNotes = () => {
       if (!isOnline) {
         // Obtener el remito desde IndexedDB
         const offlineNotes = (await getOfflineData("delivery_notes")) as any[];
+        const offlineItems = (await getOfflineData("delivery_note_items")) as any[];
         const note = offlineNotes.find((n: any) => n.id === id);
 
         if (!note) throw new Error("Remito no encontrado");
 
-        await markDeliveryNoteAsPaidOffline(id, note.total_amount);
+        const noteItems = (offlineItems || []).filter((item: any) => item.delivery_note_id === id);
+        const computedTotal = noteItems.length > 0 ? calculateItemsTotal(noteItems) : Number(note.total_amount || 0);
+
+        await markDeliveryNoteAsPaidOffline(id, computedTotal);
         return;
       }
 
-      const { data: note } = await supabase.from("delivery_notes").select("total_amount").eq("id", id).single();
+      const { data: note, error: fetchError } = await supabase
+        .from("delivery_notes")
+        .select("total_amount, items:delivery_note_items(quantity, unit_price, subtotal)")
+        .eq("id", id)
+        .single();
 
+      if (fetchError) throw fetchError;
       if (!note) throw new Error("Remito no encontrado");
+
+      const computedTotal =
+        Array.isArray(note.items) && note.items.length > 0 ? calculateItemsTotal(note.items) : Number(note.total_amount || 0);
 
       const { error } = await supabase
         .from("delivery_notes")
         .update({
-          paid_amount: note.total_amount,
+          total_amount: computedTotal,
+          paid_amount: computedTotal,
           status: "paid",
         })
         .eq("id", id);
@@ -533,3 +561,7 @@ export const useDeliveryNotes = () => {
     isDeleting: deleteMutation.isPending,
   };
 };
+
+
+
+

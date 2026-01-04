@@ -37,13 +37,36 @@ import Header from "@/components/Header";
 
 const getItemSubtotal = (item: any) => Number(item.quantity) * Number(item.unitPrice);
 
+const getNoteTotal = (note: DeliveryNote) => {
+  if (note.items?.length) {
+    return note.items.reduce((sum, item) => sum + Number(item.subtotal ?? getItemSubtotal(item)), 0);
+  }
+
+  const totalAmount = Number(note.totalAmount || 0);
+  if (Number.isFinite(totalAmount) && totalAmount > 0) return totalAmount;
+
+  const paidAmount = Number(note.paidAmount || 0);
+  const remainingBalance = Number(note.remainingBalance || 0);
+  const derivedTotal = paidAmount + remainingBalance;
+
+  return Number.isFinite(derivedTotal) && derivedTotal > 0 ? derivedTotal : totalAmount;
+};
+
+const getRemainingBalance = (note: DeliveryNote) => {
+  const totalAmount = getNoteTotal(note);
+  const paidAmount = Number(note.paidAmount || 0);
+  return Math.max(0, totalAmount - paidAmount);
+};
+
 const buildNoteForOutput = (note: DeliveryNote): DeliveryNote => {
   const items = (note.items || []).map((item: any) => ({
     ...item,
     subtotal: getItemSubtotal(item),
   }));
 
-  const totalAmount = items.reduce((sum, item) => sum + Number(item.subtotal || 0), 0);
+  const totalAmount = items.length
+    ? items.reduce((sum, item) => sum + Number(item.subtotal || 0), 0)
+    : getNoteTotal(note);
   const paidAmount = Number(note.paidAmount || 0);
   const remainingBalance = Math.max(0, totalAmount - paidAmount);
 
@@ -105,6 +128,25 @@ const Remitos = () => {
     });
     return map;
   }, [deliveryNotes]);
+
+  const clientPendingBalances = useMemo(() => {
+    const map = new Map<string, number>();
+    deliveryNotes.forEach((note) => {
+      if (note.status !== "pending" || !note.clientId) return;
+      const remainingBalance = getRemainingBalance(note);
+      map.set(note.clientId, (map.get(note.clientId) || 0) + remainingBalance);
+    });
+    return map;
+  }, [deliveryNotes]);
+
+  const totalPendingBalance = useMemo(
+    () =>
+      deliveryNotes.reduce((sum, note) => {
+        if (note.status !== "pending") return sum;
+        return sum + getRemainingBalance(note);
+      }, 0),
+    [deliveryNotes],
+  );
 
   const filteredClients = useMemo(() => {
     const query = clientSearchQuery.trim().toLowerCase();
@@ -245,6 +287,17 @@ const Remitos = () => {
           </div>
 
           <TabsContent value="remitos" className="space-y-6">
+            <Card className="relative overflow-hidden border-primary/20 bg-gradient-to-br from-primary/5 via-background to-primary/10">
+              <CardContent className="flex flex-col gap-3 pt-6 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-1">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Deuda total de clientes
+                  </p>
+                  <p className="text-2xl font-semibold text-foreground">{formatARS(totalPendingBalance)}</p>
+                </div>
+                
+              </CardContent>
+            </Card>
             <Card>
           <CardHeader>
             <CardTitle>Filtros</CardTitle>
@@ -477,8 +530,14 @@ const Remitos = () => {
                     )}
                   </div>
                 </div>
-                <div className="text-sm text-muted-foreground md:text-right">
-                  Total: <span className="font-medium text-foreground">{clients.length}</span>
+                <div className="text-sm text-muted-foreground md:text-right space-y-1">
+                  <div>
+                    Total: <span className="font-medium text-foreground">{clients.length}</span>
+                  </div>
+                  <div className="inline-flex items-center justify-end gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                    Deuda total: {formatARS(totalPendingBalance)}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -501,6 +560,9 @@ const Remitos = () => {
                             {clientNoteCounts.get(client.id) ? (
                               <Badge variant="secondary">{clientNoteCounts.get(client.id)} remito(s)</Badge>
                             ) : null}
+                            <Badge variant="outline" className="border-primary/20 bg-primary/10 text-primary">
+                              Debe {formatARS(clientPendingBalances.get(client.id) || 0)}
+                            </Badge>
                           </div>
                           {client.phone && <p className="text-sm">Tel: {client.phone}</p>}
                           {client.address && <p className="text-sm">{client.address}</p>}

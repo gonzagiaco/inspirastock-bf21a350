@@ -2110,13 +2110,15 @@ export async function markDeliveryNoteAsPaidOffline(id: string, paidAmount: numb
   const note = await localDB.delivery_notes.get(id);
   if (!note) throw new Error("Remito no encontrado");
 
-  const remainingBalance = note.total_amount - paidAmount;
+  const totalAmount = Number.isFinite(paidAmount) ? paidAmount : note.total_amount;
+  const remainingBalance = totalAmount - paidAmount;
   const status = remainingBalance <= 0 ? "paid" : "pending";
   const now = new Date().toISOString();
-
+  
   // Actualizaciones para IndexedDB (incluye remaining_balance para UI)
   const localUpdates = {
     paid_amount: paidAmount,
+    total_amount: totalAmount,
     remaining_balance: remainingBalance,
     status,
     updated_at: now,
@@ -2137,12 +2139,13 @@ export async function markDeliveryNoteAsPaidOffline(id: string, paidAmount: numb
     // FUSIONAR con la operaciÃ³n existente (mantener snapshot e items)
     console.log(`ðŸ”„ Fusionando pago con operaciÃ³n UPDATE existente para remito ${id}`);
     
-    const mergedData = {
-      ...pendingOp.data,
-      paid_amount: paidAmount,
-      status,
-      updated_at: now,
-    };
+      const mergedData = {
+        ...pendingOp.data,
+        paid_amount: paidAmount,
+        total_amount: totalAmount,
+        status,
+        updated_at: now,
+      };
 
     await localDB.pending_operations.update(pendingOp.id!, {
       data: mergedData,
@@ -2152,13 +2155,14 @@ export async function markDeliveryNoteAsPaidOffline(id: string, paidAmount: numb
     // No hay operaciÃ³n pendiente, encolar nueva
     console.log(`âž• Encolando nueva operaciÃ³n de pago para remito ${id}`);
     
-    await queueOperation("delivery_notes", "UPDATE", id, {
-      paid_amount: paidAmount,
-      status,
-      updated_at: now,
-    });
+      await queueOperation("delivery_notes", "UPDATE", id, {
+        paid_amount: paidAmount,
+        total_amount: totalAmount,
+        status,
+        updated_at: now,
+      });
+    }
   }
-}
 
 // PRODUCTOS - Actualizar cantidad (privada, usa delta)
 /**

@@ -266,6 +266,15 @@ describe("useDeliveryNotes", () => {
           },
         ]);
       }
+      if (table === "delivery_note_items") {
+        return Promise.resolve([
+          {
+            delivery_note_id: "note-offline-paid",
+            quantity: 2,
+            unit_price: 50,
+          },
+        ]);
+      }
       return Promise.resolve([]);
     });
     const { result } = renderUseDeliveryNotes();
