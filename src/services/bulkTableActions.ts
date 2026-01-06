@@ -110,6 +110,7 @@ export async function convertUsdToArsForProducts(args: {
   products: Array<{
     id: string;
     price?: number | null;
+    quantity?: number | null;
     data?: Record<string, any>;
     calculated_data?: Record<string, any>;
   }>;
@@ -568,11 +569,13 @@ export async function deleteProductsEverywhere(args: { productIds: string[] }) {
 
   await localDB.transaction(
     "rw",
-    localDB.dynamic_products,
-    localDB.dynamic_products_index,
-    localDB.my_stock_products,
-    localDB.product_lists,
-    localDB.request_items,
+    [
+      localDB.dynamic_products,
+      localDB.dynamic_products_index,
+      localDB.my_stock_products,
+      localDB.product_lists,
+      localDB.request_items,
+    ],
     async () => {
       await localDB.dynamic_products.bulkDelete(productIds);
       if (indexIds.length) await localDB.dynamic_products_index.bulkDelete(indexIds as any);
