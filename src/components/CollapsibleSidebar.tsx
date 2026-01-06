@@ -11,18 +11,64 @@ import {
   Receipt,
   CircleHelp,
   Package,
+  RefreshCw,
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { supabase } from "@/integrations/supabase/client";
+import { isOnline, localDB } from "@/lib/localDB";
+import { toast } from "sonner";
+
+const ARG_TIMEZONE = "America/Argentina/Buenos_Aires";
+
+const formatArgentinaDateTime = (value?: string | null) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("es-AR", {
+    timeZone: ARG_TIMEZONE,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const getPart = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  const day = getPart("day");
+  const month = getPart("month");
+  const year = getPart("year");
+  const hour = getPart("hour");
+  const minute = getPart("minute");
+  if (!day || !month || !year || !hour || !minute) return null;
+  return `${day}/${month}/${year} ${hour}:${minute}`;
+};
+
+const getArgentinaDate = (base: Date) => new Date(base.toLocaleString("en-US", { timeZone: ARG_TIMEZONE }));
+
+const getNextArgentinaUpdate = (base: Date) => {
+  const argentinaNow = getArgentinaDate(base);
+  const nextArgentina = new Date(argentinaNow);
+  nextArgentina.setHours(10, 0, 0, 0);
+  if (argentinaNow.getTime() >= nextArgentina.getTime()) {
+    nextArgentina.setDate(nextArgentina.getDate() + 1);
+  }
+  const offsetMs = base.getTime() - argentinaNow.getTime();
+  return new Date(nextArgentina.getTime() + offsetMs);
+};
 
 const CollapsibleSidebar = () => {
   const location = useLocation();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showLogout, setShowLogout] = useState(false);
+  const [dollarRate, setDollarRate] = useState<number | null>(null);
+  const [dollarUpdatedAt, setDollarUpdatedAt] = useState<string | null>(null);
+  const [isRefreshingDollar, setIsRefreshingDollar] = useState(false);
   const { user, signOut } = useAuth();
+  const refreshInFlightRef = useRef(false);
 
   const getUserInitials = () => {
     if (user?.user_metadata?.full_name) {
@@ -42,12 +88,151 @@ const CollapsibleSidebar = () => {
 
   const isActive = (path: string) => location.pathname === path;
 
+  const applyDollarSetting = useCallback((value: any, updatedAt?: string | null) => {
+    const rate = Number(value?.rate ?? value?.venta ?? 0);
+    setDollarRate(Number.isFinite(rate) && rate > 0 ? rate : null);
+    const resolvedUpdatedAt =
+      updatedAt ?? value?.updatedAt ?? value?.fechaActualizacion ?? null;
+    setDollarUpdatedAt(resolvedUpdatedAt);
+  }, []);
+
   useEffect(() => {
     // Si se expande el sidebar, cerramos el panel de logout flotante
     if (!isCollapsed) {
       setShowLogout(false);
     }
   }, [isCollapsed]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const loadDollarSetting = async () => {
+      try {
+        const cached = await localDB.settings.get("dollar_official");
+        if (cached?.value && isActive) {
+          applyDollarSetting(cached.value, cached.updated_at);
+        }
+
+        if (!isOnline()) return;
+        const { data, error } = await supabase
+          .from("settings")
+          .select("value, updated_at, created_at")
+          .eq("key", "dollar_official")
+          .maybeSingle();
+        if (error) throw error;
+        if (!data?.value || !isActive) return;
+
+        applyDollarSetting(data.value, data.updated_at);
+        await localDB.settings.put({
+          key: "dollar_official",
+          value: data.value,
+          updated_at: data.updated_at ?? new Date().toISOString(),
+          created_at: data.created_at ?? new Date().toISOString(),
+        });
+      } catch (error) {
+        console.error("Error cargando dolar oficial:", error);
+      }
+    };
+
+    void loadDollarSetting();
+    return () => {
+      isActive = false;
+    };
+  }, [applyDollarSetting]);
+
+  const handleRefreshDollar = async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    if (!isOnline()) {
+      refreshInFlightRef.current = false;
+      toast.error("Sin conexión. No se puede actualizar el dólar.");
+      return;
+    }
+
+    setIsRefreshingDollar(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("update-dollar-rate");
+      if (error) throw error;
+      if (!data?.success || !data?.data) {
+        throw new Error("No se pudo actualizar el dólar oficial");
+      }
+
+      const now = new Date().toISOString();
+      applyDollarSetting(data.data, now);
+      await localDB.settings.put({
+        key: "dollar_official",
+        value: data.data,
+        updated_at: now,
+        created_at: now,
+      });
+      const rate = Number(data.data.rate ?? data.data.venta ?? 0);
+      const rateLabel = Number.isFinite(rate) && rate > 0 ? rate.toFixed(2) : "--";
+      toast.success(`Dólar actualizado: $${rateLabel}`);
+    } catch (error: any) {
+      console.error("Error actualizando dólar oficial:", error);
+      toast.error(error?.message || "Error al actualizar el dólar");
+    } finally {
+      refreshInFlightRef.current = false;
+      setIsRefreshingDollar(false);
+    }
+  };
+
+  const refreshDollarSilent = useCallback(async () => {
+    if (refreshInFlightRef.current) return;
+    if (!isOnline()) return;
+
+    refreshInFlightRef.current = true;
+    try {
+      const { data, error } = await supabase.functions.invoke("update-dollar-rate");
+      if (error) throw error;
+      if (!data?.success || !data?.data) {
+        throw new Error("No se pudo actualizar el dólar oficial");
+      }
+
+      const now = new Date().toISOString();
+      applyDollarSetting(data.data, now);
+      await localDB.settings.put({
+        key: "dollar_official",
+        value: data.data,
+        updated_at: now,
+        created_at: now,
+      });
+    } catch (error) {
+      console.error("Error actualizando dólar oficial:", error);
+    } finally {
+      refreshInFlightRef.current = false;
+    }
+  }, [applyDollarSetting]);
+
+  useEffect(() => {
+    let timerId: number | null = null;
+    let cancelled = false;
+
+    const scheduleNext = () => {
+      const now = new Date();
+      const nextUpdate = getNextArgentinaUpdate(now);
+      let delay = nextUpdate.getTime() - now.getTime();
+      if (!Number.isFinite(delay) || delay < 0) {
+        delay = 60 * 1000;
+      }
+      timerId = window.setTimeout(async () => {
+        if (cancelled) return;
+        await refreshDollarSilent();
+        scheduleNext();
+      }, delay);
+    };
+
+    scheduleNext();
+    return () => {
+      cancelled = true;
+      if (timerId != null) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, [refreshDollarSilent]);
+
+  const formattedDollarUpdatedAt = formatArgentinaDateTime(dollarUpdatedAt);
+  const displayDollarUpdatedAt = formattedDollarUpdatedAt ?? dollarUpdatedAt ?? null;
 
   return (
     <>
@@ -133,9 +318,9 @@ const CollapsibleSidebar = () => {
                 to={item.href}
                 onClick={() => setIsMobileOpen(false)}
                 className={`
-                  flex items-center rounded-xl transition-all duration-300
+                  flex items-center rounded-xl
                   ${isCollapsed ? "justify-center p-3" : "gap-3 px-4 py-3"}
-                  ${active ? "glassmorphism shadow-lg text-foreground" : "hover:bg-primary/10 text-foreground"}
+                  ${active ? "glassmorphism shadow-lg text-foreground" : "text-foreground"}
                 `}
                 title={isCollapsed ? item.name : undefined}
               >
@@ -150,6 +335,54 @@ const CollapsibleSidebar = () => {
 
         {/* User Profile */}
         <div className={`mt-auto ${isCollapsed ? "space-y-2" : "space-y-4"}`}>
+          <div
+            className={`glassmorphism rounded-xl ${isCollapsed ? "p-2" : "p-3"}`}
+            title={
+              dollarRate
+                ? `Dólar oficial: $${dollarRate.toFixed(2)}${displayDollarUpdatedAt ? ` (Actualizado: ${displayDollarUpdatedAt})` : ""}`
+                : "Dólar oficial no disponible"
+            }
+          >
+            <div
+              className={`flex items-center ${isCollapsed ? "justify-center" : "justify-between"} gap-2`}
+            >
+              {!isCollapsed && (
+                <span className="text-xs text-muted-foreground">Dólar oficial</span>
+              )}
+              <button
+                type="button"
+                onClick={handleRefreshDollar}
+                disabled={isRefreshingDollar}
+                className="rounded-md p-1 hover:bg-primary/10 disabled:opacity-60"
+                aria-label="Actualizar dólar oficial"
+              >
+                <RefreshCw className={`h-4 w-4 ${isRefreshingDollar ? "animate-spin" : ""}`} />
+              </button>
+            </div>
+            <div
+              className={`mt-1 ${
+                isCollapsed ? "text-center text-xs font-semibold" : "flex items-baseline gap-2"
+              }`}
+            >
+              {dollarRate ? (
+                <span className={isCollapsed ? "text-foreground" : "text-lg font-semibold text-foreground"}>
+                  ${dollarRate.toFixed(2)}
+                </span>
+              ) : (
+                <span className={isCollapsed ? "text-muted-foreground" : "text-sm text-muted-foreground"}>
+                  No disponible
+                </span>
+              )}
+              {!isCollapsed && displayDollarUpdatedAt && (
+                <span
+                  className="text-[10px] text-muted-foreground truncate"
+                  title={`Actualizado: ${displayDollarUpdatedAt}`}
+                >
+                  {displayDollarUpdatedAt}
+                </span>
+              )}
+            </div>
+          </div>
           <div className={`glassmorphism rounded-xl ${isCollapsed ? "p-2" : "p-4"}`}>
             {isCollapsed ? (
               <div className="relative">

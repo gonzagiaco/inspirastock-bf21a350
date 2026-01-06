@@ -3,13 +3,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Loader2, Columns, DollarSign, Settings2, Tags } from "lucide-react";
-import { useQueryClient, useQuery } from "@tanstack/react-query";
+import { Loader2, Columns, Settings2, Tags } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { localDB, isOnline, queueOperation, syncProductListById } from "@/lib/localDB";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ColumnsTab } from "@/components/mapping/tabs/ColumnsTab";
 import { PricesTab } from "@/components/mapping/tabs/PricesTab";
-import { DollarConversionTab } from "@/components/mapping/tabs/DollarConversionTab";
 import { OptionsTab } from "@/components/mapping/tabs/OptionsTab";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { ColumnSchema } from "@/types/productList";
@@ -46,37 +45,9 @@ interface ListConfigurationViewProps {
   onSaved?: () => void;
 }
 
-function useOfficialDollar() {
-  return useQuery({
-    queryKey: ["dollar-official"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("settings")
-        .select("value, updated_at")
-        .eq("key", "dollar_official")
-        .maybeSingle();
-
-      if (error) throw error;
-      if (!data) return null;
-
-      const value = data.value as any;
-      return {
-        rate: value.rate || 0,
-        venta: value.venta,
-        compra: value.compra,
-        source: value.source,
-        updatedAt: data.updated_at,
-      };
-    },
-    staleTime: 0,
-    refetchInterval: 10 * 60 * 1000,
-  });
-}
-
 export function ListConfigurationView({ listId, onSaved }: ListConfigurationViewProps) {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
-  const { data: officialDollar, isLoading: loadingDollar } = useOfficialDollar();
 
   const [sample, setSample] = useState<any[]>([]);
   const [columnSchema, setColumnSchema] = useState<ColumnSchema[]>([]);
@@ -184,22 +155,6 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
       isCancelled = true;
     };
   }, [listId]);
-
-  const handleRefetchDollar = async () => {
-    try {
-      const { error } = await supabase.functions.invoke("update-dollar-rate");
-      if (error) {
-        console.error("Error al actualizar dólar:", error);
-        toast.error("Error al actualizar el dólar");
-        return;
-      }
-      await queryClient.invalidateQueries({ queryKey: ["dollar-official"] });
-      toast.success("Dólar actualizado correctamente");
-    } catch (error) {
-      console.error("Error al actualizar dólar:", error);
-      toast.error("Error al actualizar el dólar");
-    }
-  };
 
   const handleSave = async () => {
     if (map.code_keys.length === 0 && map.name_keys.length === 0) {
@@ -351,7 +306,7 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
         <div className="border-b bg-background/50 backdrop-blur-sm sticky top-0 z-10">
           <ScrollArea className="w-full">
-            <TabsList className='w-full grid grid-cols-4 h-10 gap-1 overflow-hidden p-0'>
+            <TabsList className='w-full grid grid-cols-3 h-10 gap-1 overflow-hidden p-0'>
               <TabsTrigger value="columns" className="h-full overflow-hidden gap-2 whitespace-normal data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                 <Columns className="w-4 h-4" />
                 <span className={isMobile ? 'hidden sm:inline truncate overflow-hidden' : 'truncate overflow-hidden'}>Columnas</span>
@@ -359,10 +314,6 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
               <TabsTrigger value="prices" className="h-full overflow-hidden flex items-center justify-center w-full min-w-0 px-2 gap-2 whitespace-normal data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                 <Tags className="w-4 h-4" />
                 <span className={isMobile ? 'hidden sm:inline truncate overflow-hidden' : 'truncate overflow-hidden'}>Precios</span>
-              </TabsTrigger>
-              <TabsTrigger value="dollar" className="h-full overflow-hidden flex items-center justify-center w-full min-w-0 px-2 gap-2 whitespace-normal data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-                <DollarSign className="w-4 h-4" />
-                <span className={isMobile ? 'hidden sm:inline truncate overflow-hidden' : 'truncate overflow-hidden'}>Dólar</span>
               </TabsTrigger>
               <TabsTrigger value="options" className="h-full overflow-hidden flex items-center justify-center w-full min-w-0 px-2 gap-2 whitespace-normal data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                 <Settings2 className="w-4 h-4" />
@@ -390,18 +341,6 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
               setMap={setMap}
               setKeys={setKeys}
               isSaving={isSaving}
-              isNumericColumn={isNumericColumn}
-            />
-          </TabsContent>
-
-          <TabsContent value="dollar" className="mt-0 space-y-6">
-            <DollarConversionTab 
-              keys={keys} 
-              map={map} 
-              setMap={setMap}
-              officialDollar={officialDollar}
-              loadingDollar={loadingDollar}
-              onRefetchDollar={handleRefetchDollar}
               isNumericColumn={isNumericColumn}
             />
           </TabsContent>

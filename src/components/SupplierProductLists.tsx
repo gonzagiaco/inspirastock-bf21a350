@@ -44,7 +44,7 @@ const SupplierListProducts = ({
   listId: string;
   columnSchema: ColumnSchema[];
   mappingConfig?: ProductList["mapping_config"];
-  onAddToRequest?: (product: DynamicProduct) => void;
+  onAddToRequest?: (product: DynamicProduct, mappingConfig?: ProductList["mapping_config"], options?: { silent?: boolean }) => void;
   onMappingDialogChange?: (isOpen: boolean, listId: string | null) => void;
 }) => {
   const queryClient = useQueryClient();

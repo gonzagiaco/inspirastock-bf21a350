@@ -22,7 +22,7 @@ interface SupplierStockSectionProps {
     productCount: number;
     columnSchema: any[];
   }>;
-  onAddToRequest: (product: any, mappingConfig?: any) => void;
+  onAddToRequest: (product: any, mappingConfig?: any, options?: { silent?: boolean }) => void;
 }
 
 export function SupplierStockSection({ supplierName, supplierLogo, lists, onAddToRequest }: SupplierStockSectionProps) {
@@ -123,7 +123,7 @@ function ListProductsWrapper({
   listId: string;
   columnSchema: any[];
   mappingConfig: any;
-  onAddToRequest: (product: any, mappingConfig?: any) => void;
+  onAddToRequest: (product: any, mappingConfig?: any, options?: { silent?: boolean }) => void;
 }) {
   const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useListProducts(listId);
 

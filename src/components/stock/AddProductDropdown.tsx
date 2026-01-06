@@ -15,7 +15,7 @@ import { useLocation } from "react-router-dom";
 interface AddProductDropdownProps {
   product: any;
   mappingConfig?: any;
-  onAddToRequest: (product: any, mappingConfig?: any) => void;
+  onAddToRequest: (product: any, mappingConfig?: any, options?: { silent?: boolean }) => void;
   showAddToStock?: boolean;
   showRemoveFromStock?: boolean;
 }
@@ -35,17 +35,16 @@ export function AddProductDropdown({
 
   const productId = product.product_id || product.id;
   const handleAddToStock = async () => {
-    toast.success("Agregado a Mi Stock");
     setHasBeenAddedToStock(true);
-    queryClient.invalidateQueries({ queryKey: ["my-stock"] });
-
-    queueMicrotask(async () => {
-      try {
-        await addToMyStock(productId, 1);
-      } catch (error) {
-        console.error("Error al agregar a Mi Stock:", error);
-      }
-    });
+    try {
+      await addToMyStock(productId, 1);
+      toast.success("Agregado a Mi Stock");
+      queryClient.invalidateQueries({ queryKey: ["my-stock"], exact: false });
+    } catch (error) {
+      console.error("Error al agregar a Mi Stock:", error);
+      setHasBeenAddedToStock(false);
+      toast.error("Error al agregar a Mi Stock");
+    }
   };
 
   const handleRemoveFromStock = async () => {
@@ -53,7 +52,7 @@ export function AddProductDropdown({
 
     try {
       await removeFromMyStock(productId);
-      queryClient.invalidateQueries({ queryKey: ["my-stock"] });
+      queryClient.invalidateQueries({ queryKey: ["my-stock"], exact: false });
     } catch (error: any) {
       console.error("Error removing from stock:", error);
       toast.error("Error al quitar de Mi Stock");
@@ -137,6 +136,7 @@ export function AddProductDropdown({
               <Button
                 size="sm"
                 variant="outline"
+                onPointerDown={() => setHasBeenAddedToStock(true)}
                 onClick={handleAddToStock}
                 disabled={shouldDisableAddToStock}
                 className={

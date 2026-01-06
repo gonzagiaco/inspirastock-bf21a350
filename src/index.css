@@ -109,6 +109,21 @@ All colors MUST be HSL.
     @apply dark;
   }
 
+  /* Evitar selección de texto en toda la app */
+  html,
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Mantener selección en campos editables */
+  input,
+  textarea,
+  [contenteditable="true"] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
   /* Custom scrollbar colors */
   * {
     scrollbar-color: #7588eb #0f1729;

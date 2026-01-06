@@ -172,6 +172,9 @@ const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
 
       if (resolvedPrice == null && product.product_id) {
         const indexRecord = await localDB.dynamic_products_index.where("product_id").equals(product.product_id).first();
+        if (resolvedPrice == null && (priceCol === "price" || priceCol === mappingConfig.price_primary_key)) {
+          resolvedPrice = parsePriceValue(indexRecord?.price);
+        }
         if (indexRecord?.calculated_data?.[priceCol] != null) {
           resolvedPrice = parsePriceValue(indexRecord.calculated_data[priceCol]);
         }
@@ -302,6 +305,10 @@ const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
           .first();
         
         console.log('🔍 DeliveryNote - IndexedDB record:', indexRecord?.calculated_data);
+
+        if (resolvedPrice == null && (priceCol === "price" || priceCol === mappingConfig?.price_primary_key)) {
+          resolvedPrice = parsePriceValue(indexRecord?.price);
+        }
         
         if (indexRecord?.calculated_data?.[priceCol] != null) {
           resolvedPrice = parsePriceValue(indexRecord.calculated_data[priceCol]);

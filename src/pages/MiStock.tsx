@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { Filter, Package, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,13 +16,22 @@ import RequestCart from "@/components/RequestCart";
 import { RequestItem } from "@/types";
 import { exportOrdersBySupplier } from "@/utils/exportOrdersBySupplier";
 import { toast } from "sonner";
+import { useRequestCartStore } from "@/stores/requestCartStore";
+
+function parsePriceValue(value: any): number | null {
+  if (value == null) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const cleaned = String(value).replace(/[^0-9.,-]/g, "").replace(",", ".");
+  const parsed = Number.parseFloat(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 export default function MiStock() {
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [onlyWithStock, setOnlyWithStock] = useState(false);
-  const [requestList, setRequestList] = useState<RequestItem[]>([]);
   const [isCartCollapsed, setIsCartCollapsed] = useState(true);
+  const { requestList, addOrIncrement, updateQuantity, removeItem } = useRequestCartStore();
 
   // Estado local para actualizaciones optimistas
   const [localProducts, setLocalProducts] = useState<any[]>([]);
@@ -65,28 +74,26 @@ export default function MiStock() {
   }, [isSuccessProducts, isLoadingLists, isLoadingSuppliers, lists]);
 
   // Handler para actualizar cantidad localmente (optimista)
-  const handleUpdateQuantity = (productId: string, newQuantity: number) => {
-    setLocalProducts(prev =>
-      prev.map(p =>
-        (p.product_id === productId) ? { ...p, quantity: newQuantity } : p
-      )
-    );
-  };
+  const handleUpdateQuantity = useCallback((productId: string, newQuantity: number) => {
+    setLocalProducts((prev) => prev.map((p) => (p.product_id === productId ? { ...p, quantity: newQuantity } : p)));
+  }, []);
 
-  const handleUpdateThreshold = (productId: string, newThreshold: number) => {
-    setLocalProducts(prev =>
-      prev.map(p =>
-        (p.product_id === productId) ? { ...p, stock_threshold: newThreshold } : p
-      )
+  const handleUpdateThreshold = useCallback((productId: string, newThreshold: number) => {
+    setLocalProducts((prev) =>
+      prev.map((p) => (p.product_id === productId ? { ...p, stock_threshold: newThreshold } : p)),
     );
-  };
+  }, []);
 
   // Handler para eliminar producto localmente (optimista)
-  const handleRemoveProduct = (productId: string) => {
-    setLocalProducts(prev =>
-      prev.filter(p => p.product_id !== productId)
-    );
-  };
+  const handleRemoveProduct = useCallback((productId: string) => {
+    setLocalProducts((prev) => prev.filter((p) => p.product_id !== productId));
+  }, []);
+
+  const handleRemoveProducts = useCallback((productIds: string[]) => {
+    if (!productIds.length) return;
+    const ids = new Set(productIds);
+    setLocalProducts((prev) => prev.filter((p) => !ids.has(p.product_id)));
+  }, []);
 
   // Usar isHydrated para controlar el loading state inicial
   const isLoading = !isHydrated || isLoadingSuppliers || isLoadingLists || isLoadingProducts;
@@ -119,18 +126,22 @@ export default function MiStock() {
       }
     >();
 
-    // Create a map of list_id to list info
     const listInfoMap = new Map<string, any>();
-    lists.forEach((list: any) => {
+    for (const list of lists as any[]) {
       listInfoMap.set(list.id, list);
-    });
+    }
 
-    productsToDisplay.forEach((product: any) => {
+    const supplierMap = new Map<string, any>();
+    for (const supplier of suppliers as any[]) {
+      supplierMap.set(supplier.id, supplier);
+    }
+
+    for (const product of productsToDisplay as any[]) {
       const listInfo = listInfoMap.get(product.list_id);
-      if (!listInfo) return;
+      if (!listInfo) continue;
 
-      const supplier = suppliers.find((s) => s.id === listInfo.supplier_id);
-      if (!supplier) return;
+      const supplier = supplierMap.get(listInfo.supplier_id);
+      if (!supplier) continue;
 
       if (!sections.has(supplier.id)) {
         sections.set(supplier.id, {
@@ -156,49 +167,32 @@ export default function MiStock() {
       const updatedAt = Date.parse(product.updated_at || "") || 0;
       listEntry.lastStockUpdate = Math.max(listEntry.lastStockUpdate, updatedAt);
 
-      listEntry.products.push({
-        id: product.product_id,
-        product_id: product.product_id,
-        listId: product.list_id,
-        list_id: product.list_id,
-        code: product.code,
-        name: product.name,
-        price: product.price,
-        quantity: product.quantity,
-        stock_threshold: product.stock_threshold ?? 0,
-        calculated_data: product.calculated_data,
-        data: product.data,
-        supplierId: supplier.id,
-      });
-    });
+      listEntry.products.push(product);
+    }
 
     return sections;
   }, [productsToDisplay, lists, suppliers]);
 
   const visibleSupplierSections = useMemo(() => {
-    if (supplierFilter === "all") {
-      return Array.from(supplierSections.entries());
-    }
-    return Array.from(supplierSections.entries()).filter(([supplierId]) => supplierId === supplierFilter);
+    const entries =
+      supplierFilter === "all"
+        ? Array.from(supplierSections.entries())
+        : Array.from(supplierSections.entries()).filter(([supplierId]) => supplierId === supplierFilter);
+
+    return entries.map(([supplierId, section]) => ({
+      supplierId,
+      supplierName: section.supplierName,
+      supplierLogo: section.supplierLogo,
+      lists: Array.from(section.lists.values()).sort((a, b) => b.lastStockUpdate - a.lastStockUpdate),
+    }));
   }, [supplierSections, supplierFilter]);
 
-  // Parse price for request list
-  function parsePriceValue(value: any): number | null {
-    if (value == null) return null;
-    if (typeof value === "number") return isFinite(value) ? value : null;
-    const cleaned = String(value)
-      .replace(/[^0-9.,-]/g, "")
-      .replace(",", ".");
-    const parsed = parseFloat(cleaned);
-    return !isNaN(parsed) && isFinite(parsed) ? parsed : null;
-  }
-
-  const handleAddToRequest = (product: any, mappingConfig?: any) => {
+  const handleAddToRequest = useCallback((product: any, mappingConfig?: any, options?: { silent?: boolean }) => {
     const existingItem = requestList.find((r) => r.productId === product.id);
-    const effectiveSupplierId = product.supplierId || "";
+    const effectiveSupplierId = product.supplierId || product.supplier_id || "";
 
     if (existingItem) {
-      setRequestList((prev) => prev.map((r) => (r.productId === product.id ? { ...r, quantity: r.quantity + 1 } : r)));
+      updateQuantity(existingItem.id, existingItem.quantity + 1);
     } else {
       let finalPrice = parsePriceValue(product.price) ?? 0;
       const cartPriceColumn = mappingConfig?.cart_price_column;
@@ -208,7 +202,10 @@ export default function MiStock() {
       }
 
       const newRequest: RequestItem = {
-        id: Date.now().toString(),
+        id:
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         productId: product.id,
         code: product.code || "",
         name: product.name || "",
@@ -216,21 +213,21 @@ export default function MiStock() {
         costPrice: finalPrice,
         quantity: 1,
       };
-      setRequestList((prev) => [...prev, newRequest]);
-      toast.success("Producto agregado al carrito");
+      addOrIncrement(newRequest);
+      if (!options?.silent) toast.success("Producto agregado al carrito");
     }
-  };
+  }, [addOrIncrement, requestList, updateQuantity]);
 
-  const handleUpdateRequestQuantity = (id: string, quantity: number) => {
-    setRequestList((prev) => prev.map((item) => (item.id === id ? { ...item, quantity } : item)));
-  };
+  const handleUpdateRequestQuantity = useCallback((id: string, quantity: number) => {
+    updateQuantity(id, quantity);
+  }, [updateQuantity]);
 
-  const handleRemoveFromRequest = (id: string) => {
-    setRequestList((prev) => prev.filter((item) => item.id !== id));
+  const handleRemoveFromRequest = useCallback((id: string) => {
+    removeItem(id);
     toast.success("Producto eliminado del carrito");
-  };
+  }, [removeItem]);
 
-  const handleExportToExcel = () => {
+  const handleExportToExcel = useCallback(() => {
     if (requestList.length === 0) {
       toast.error("No hay productos para exportar");
       return;
@@ -240,7 +237,7 @@ export default function MiStock() {
     toast.success("Pedidos exportados", {
       description: `Se generaron ${uniqueSuppliers} archivo${uniqueSuppliers > 1 ? "s" : ""} (uno por proveedor)`,
     });
-  };
+  }, [requestList, suppliers]);
 
   const totalProducts = productsToDisplay.length;
   const productsWithStock = productsToDisplay.filter((p: any) => (p.quantity || 0) > 0).length;
@@ -353,16 +350,17 @@ export default function MiStock() {
             </Card>
           ) : (
             <div className="space-y-6">
-          {visibleSupplierSections.map(([supplierId, section]) => (
+              {visibleSupplierSections.map((section) => (
                 <MyStockSupplierSection
-                  key={supplierId}
+                  key={section.supplierId}
                   supplierName={section.supplierName}
                   supplierLogo={section.supplierLogo}
-                  lists={Array.from(section.lists.values()).sort((a, b) => b.lastStockUpdate - a.lastStockUpdate)}
+                  lists={section.lists}
                   onAddToRequest={handleAddToRequest}
                   onQuantityChange={handleUpdateQuantity}
                   onThresholdChange={handleUpdateThreshold}
                   onRemoveProduct={handleRemoveProduct}
+                  onRemoveProducts={handleRemoveProducts}
                   isMobile={isMobile}
                 />
               ))}

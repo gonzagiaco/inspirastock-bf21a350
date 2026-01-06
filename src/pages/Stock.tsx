@@ -20,6 +20,7 @@ import { getOfflineData } from "@/lib/localDB";
 import { GlobalProductSearch } from "@/components/GlobalProductsSearch";
 import { useMyStockProducts } from "@/hooks/useMyStockProducts";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useRequestCartStore } from "@/stores/requestCartStore";
 
 // Helper function to extract name from product data for search results
 function extractNameFromFullData(data: Record<string, any>, schema: any[], mappingConfig?: any): string {
@@ -52,8 +53,8 @@ function extractNameFromFullData(data: Record<string, any>, schema: any[], mappi
 
 export default function Stock() {
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
-  const [requestList, setRequestList] = useState<RequestItem[]>([]);
   const [isCartCollapsed, setIsCartCollapsed] = useState(true);
+  const { requestList, addOrIncrement, updateQuantity, removeItem } = useRequestCartStore();
 
   const { data: lists = [], isLoading: isLoadingLists } = useProductListsIndex();
   const { suppliers = [], isLoading: isLoadingSuppliers } = useSuppliers();
@@ -143,7 +144,7 @@ export default function Stock() {
     return !isNaN(parsed) && isFinite(parsed) ? parsed : null;
   }
 
-  const handleAddToRequest = (product: any, mappingConfig?: any) => {
+  const handleAddToRequest = (product: any, mappingConfig?: any, options?: { silent?: boolean }) => {
     const existingItem = requestList.find((r) => r.productId === product.id);
 
     // Fallback: si el producto no trae supplierId, lo derivamos de la lista
@@ -151,7 +152,7 @@ export default function Stock() {
       product.supplierId || lists.find((l: any) => l.id === product.listId)?.supplier_id || "";
 
     if (existingItem) {
-      setRequestList((prev) => prev.map((r) => (r.productId === product.id ? { ...r, quantity: r.quantity + 1 } : r)));
+      updateQuantity(existingItem.id, existingItem.quantity + 1);
     } else {
       let finalPrice = parsePriceValue(product.price) ?? 0;
       const cartPriceColumn = mappingConfig?.cart_price_column;
@@ -204,7 +205,10 @@ export default function Stock() {
       }
 
       const newRequest: RequestItem = {
-        id: Date.now().toString(),
+        id:
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         productId: product.id,
         code: product.code || "",
         name: product.name || "",
@@ -212,17 +216,17 @@ export default function Stock() {
         costPrice: finalPrice,
         quantity: 1,
       };
-      setRequestList((prev) => [...prev, newRequest]);
-      toast.success("Producto agregado al carrito");
+      addOrIncrement(newRequest);
+      if (!options?.silent) toast.success("Producto agregado al carrito");
     }
   };
 
   const handleUpdateRequestQuantity = (id: string, quantity: number) => {
-    setRequestList((prev) => prev.map((item) => (item.id === id ? { ...item, quantity } : item)));
+    updateQuantity(id, quantity);
   };
 
   const handleRemoveFromRequest = (id: string) => {
-    setRequestList((prev) => prev.filter((item) => item.id !== id));
+    removeItem(id);
     toast.success("Producto eliminado del carrito");
   };
 

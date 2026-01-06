@@ -6,58 +6,11 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, DollarSign, Info, AlertCircle } from "lucide-react";
-import { useQueryClient, useQuery } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Input } from "../ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { syncFromSupabase } from "@/lib/localDB";
-
-// Helper para convertir a zona horaria de Argentina
-function formatArgentinaTime(dateString: string): string {
-  try {
-    const date = new Date(dateString);
-    // Convertir a hora de Argentina (UTC-3)
-    const argentinaDate = new Date(date.toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }));
-    const hours = String(argentinaDate.getHours()).padStart(2, "0");
-    const minutes = String(argentinaDate.getMinutes()).padStart(2, "0");
-    const seconds = String(argentinaDate.getSeconds()).padStart(2, "0");
-    const day = String(argentinaDate.getDate()).padStart(2, "0");
-    const month = String(argentinaDate.getMonth() + 1).padStart(2, "0");
-    const year = argentinaDate.getFullYear();
-
-    return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
-  } catch {
-    return "No disponible";
-  }
-}
-
-// Hook personalizado para obtener dólar oficial
-function useOfficialDollar() {
-  return useQuery({
-    queryKey: ["dollar-official"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("settings")
-        .select("value, updated_at")
-        .eq("key", "dollar_official")
-        .maybeSingle();
-
-      if (error) throw error;
-      if (!data) return null;
-
-      const value = data.value as any;
-      return {
-        rate: value.rate || 0,
-        venta: value.venta,
-        compra: value.compra,
-        source: value.source,
-        updatedAt: data.updated_at,
-      };
-    },
-    staleTime: 0, // No cachear, siempre traer fresco
-    refetchInterval: 10 * 60 * 1000, // Refetch cada 10 minutos
-  });
-}
 
 type MappingConfig = {
   code_keys: string[];
@@ -84,27 +37,6 @@ type Props = {
 
 export function ColumnMappingWizard({ listId, onSaved }: Props) {
   const queryClient = useQueryClient();
-  const { data: officialDollar, isLoading: loadingDollar } = useOfficialDollar();
-
-  const handleRefetchDollar = async () => {
-    try {
-      // Llamar a la función Supabase para actualizar el dólar desde la API
-      const { data, error } = await supabase.functions.invoke("update-dollar-rate");
-
-      if (error) {
-        console.error("Error al actualizar dólar:", error);
-        toast.error("Error al actualizar el dólar");
-        return;
-      }
-
-      // Invalidar la query para que React Query traiga el dato actualizado
-      await queryClient.invalidateQueries({ queryKey: ["dollar-official"] });
-      toast.success("Dólar actualizado correctamente");
-    } catch (error) {
-      console.error("Error al actualizar dólar:", error);
-      toast.error("Error al actualizar el dólar");
-    }
-  };
   const [sample, setSample] = useState<any[]>([]);
   const [columnSchema, setColumnSchema] = useState<any[]>([]);
   const [keys, setKeys] = useState<string[]>([]);
@@ -632,139 +564,6 @@ export function ColumnMappingWizard({ listId, onSaved }: Props) {
               )}
             </div>
           ))}
-      </div>
-
-      {/* Conversión de Dólar a Pesos */}
-      <div className="space-y-4 p-4 border rounded-lg bg-muted/30">
-        <div className="space-y-2">
-          <Label className="text-base font-semibold">
-            Conversión de Dólar a Pesos
-          </Label>
-          <p className="text-sm text-muted-foreground">
-            Si tus precios están en dólares, selecciona las columnas a convertir
-            usando el valor oficial.
-          </p>
-        </div>
-
-        {/* Mostrar valor actual del dólar oficial */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between p-3 bg-primary/5 border border-primary/20 rounded-lg">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-primary/10 rounded-full">
-                <DollarSign className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">
-                  Dólar Oficial
-                </p>
-                {loadingDollar ? (
-                  <p className="text-lg font-bold">Cargando...</p>
-                ) : officialDollar ? (
-                  <>
-                    <p className="text-2xl font-bold text-primary">
-                      ${officialDollar.rate.toFixed(2)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Actualizado:{" "}
-                      {formatArgentinaTime(officialDollar.updatedAt)}
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-sm text-destructive">No disponible</p>
-                )}
-              </div>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => handleRefetchDollar()}
-              disabled={loadingDollar}
-            >
-              <RefreshCw
-                className={`h-4 w-4 ${loadingDollar ? "animate-spin" : ""}`}
-              />
-            </Button>
-          </div>
-
-          <Alert>
-            <Info className="h-4 w-4" />
-            <AlertTitle>Conversión Automática</AlertTitle>
-            <AlertDescription>
-              El valor del dólar se actualiza automáticamente todos los días a
-              las 6:00 AM. Puedes actualizarlo manualmente pulsando el ícono
-              situado a la derecha del contenedor. Este valor se aplicará a
-              todas las columnas seleccionadas abajo.
-            </AlertDescription>
-          </Alert>
-        </div>
-
-        {/* Selección de columnas donde aplicar */}
-        {officialDollar && (
-          <div className="space-y-3">
-            <Label>Columnas a convertir de USD a ARS</Label>
-            <p className="text-xs text-muted-foreground">
-              Se multiplicarán por el valor oficial: $
-              {officialDollar.rate.toFixed(2)}
-            </p>
-            <ScrollArea className="h-[200px] border rounded-md p-3">
-              {keys
-                .filter((k) => isNumericColumn(k))
-                .map((key) => {
-                  const isSelected =
-                    map.dollar_conversion?.target_columns.includes(key);
-                  return (
-                    <div key={key} className="flex items-center space-x-2 py-2">
-                      <Checkbox
-                        id={`dollar-col-${key}`}
-                        checked={isSelected}
-                        onCheckedChange={(checked) => {
-                          setMap((prev) => {
-                            const current =
-                              prev.dollar_conversion?.target_columns || [];
-                            const updated = checked
-                              ? [...current, key]
-                              : current.filter((k) => k !== key);
-                            return {
-                              ...prev,
-                              dollar_conversion: {
-                                target_columns: updated,
-                              },
-                            };
-                          });
-                        }}
-                      />
-                      <label
-                        htmlFor={`dollar-col-${key}`}
-                        className="text-sm font-medium cursor-pointer"
-                      >
-                        {key}
-                      </label>
-                    </div>
-                  );
-                })}
-            </ScrollArea>
-            {map.dollar_conversion?.target_columns.length > 0 && (
-              <p className="text-xs text-success font-medium">
-                ✓ {map.dollar_conversion.target_columns.length} columna(s)
-                seleccionada(s)
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Mensaje si no hay dólar configurado */}
-        {(!officialDollar || officialDollar.rate === 0) && (
-          <Alert variant="default">
-            <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Conversión no disponible</AlertTitle>
-            <AlertDescription>
-              El valor del dólar oficial aún no está configurado en el sistema.
-              La conversión automática estará disponible una vez que se
-              actualice el valor.
-            </AlertDescription>
-          </Alert>
-        )}
       </div>
 
       {/* Columna de precio para carrito */}

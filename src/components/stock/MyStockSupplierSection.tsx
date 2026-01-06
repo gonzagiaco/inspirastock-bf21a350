@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -15,14 +15,15 @@ interface MyStockSupplierSectionProps {
     columnSchema: any[];
     products: any[];
   }>;
-  onAddToRequest: (product: any, mappingConfig?: any) => void;
+  onAddToRequest: (product: any, mappingConfig?: any, options?: { silent?: boolean }) => void;
   onQuantityChange?: (productId: string, newQuantity: number) => void;
   onThresholdChange?: (productId: string, newThreshold: number) => void;
   onRemoveProduct?: (productId: string) => void;
+  onRemoveProducts?: (productIds: string[]) => void;
   isMobile: boolean;
 }
 
-export function MyStockSupplierSection({
+export const MyStockSupplierSection = memo(function MyStockSupplierSection({
   supplierName,
   supplierLogo,
   lists,
@@ -30,9 +31,18 @@ export function MyStockSupplierSection({
   onQuantityChange,
   onThresholdChange,
   onRemoveProduct,
+  onRemoveProducts,
   isMobile,
 }: MyStockSupplierSectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [openListId, setOpenListId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isExpanded) {
+      setOpenListId(null);
+      return;
+    }
+  }, [isExpanded, lists, openListId]);
 
   const totalProducts = lists.reduce((sum, list) => sum + list.products.length, 0);
 
@@ -58,12 +68,20 @@ export function MyStockSupplierSection({
       {isExpanded && (
         <CardContent className="space-y-6 w-full overflow-hidden">
           {lists.map((list) => (
-            <Collapsible key={list.listId} defaultOpen={lists.length === 1}>
+            <Collapsible
+              key={list.listId}
+              open={openListId === list.listId}
+              onOpenChange={(open) => setOpenListId(open ? list.listId : null)}
+            >
               <div className="border rounded-lg">
                 <CollapsibleTrigger className="w-full">
                   <div className="flex items-center justify-between p-4 hover:bg-muted/50 transition-colors overflow-hidden">
                     <div className="flex items-center gap-3 min-w-0">
-                      <ChevronDown className="h-4 w-4 shrink-0" />
+                      {openListId === list.listId ? (
+                        <ChevronUp className="h-4 w-4 shrink-0" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 shrink-0" />
+                      )}
                       <div className="text-left flex-1 min-w-0">
                         <h4 className="font-medium flex-1 truncate" title={list.listName}>
                           {list.listName}
@@ -75,17 +93,20 @@ export function MyStockSupplierSection({
                 </CollapsibleTrigger>
 
                 <CollapsibleContent>
-                  <MyStockListProducts
-                    listId={list.listId}
-                    products={list.products}
-                    columnSchema={list.columnSchema}
-                    mappingConfig={list.mappingConfig}
-                    onAddToRequest={onAddToRequest}
-                    onQuantityChange={onQuantityChange}
-                    onThresholdChange={onThresholdChange}
-                    onRemoveProduct={onRemoveProduct}
-                    isMobile={isMobile}
-                  />
+                  {openListId === list.listId && (
+                    <MyStockListProducts
+                      listId={list.listId}
+                      products={list.products}
+                      columnSchema={list.columnSchema}
+                      mappingConfig={list.mappingConfig}
+                      onAddToRequest={onAddToRequest}
+                      onQuantityChange={onQuantityChange}
+                      onThresholdChange={onThresholdChange}
+                      onRemoveProduct={onRemoveProduct}
+                      onRemoveProducts={onRemoveProducts}
+                      isMobile={isMobile}
+                    />
+                  )}
                 </CollapsibleContent>
               </div>
             </Collapsible>
@@ -94,4 +115,4 @@ export function MyStockSupplierSection({
       )}
     </Card>
   );
-}
+});

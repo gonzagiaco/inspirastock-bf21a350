@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
-import { ChevronDown, ChevronUp, ShoppingCart, ArrowUpDown, ArrowUp, ArrowDown, Trash2 } from "lucide-react";
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { ChevronDown, ChevronUp, ShoppingCart, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Check } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +12,7 @@ import { QuantityCell } from "./stock/QuantityCell";
 import { StockThresholdCell } from "./stock/StockThresholdCell";
 import { AddProductDropdown } from "./stock/AddProductDropdown";
 import { normalizeRawPrice, formatARS } from "@/utils/numberParser";
+import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,6 +39,13 @@ interface ProductCardViewProps {
   showStockThreshold?: boolean;
   onThresholdChange?: (productId: string, newThreshold: number) => void;
   suppressStockToasts?: boolean;
+  enableSelection?: boolean;
+  selectedIds?: Set<string>;
+  selectionModeActive?: boolean;
+  onRowClick?: (event: ReactMouseEvent, productId: string) => void;
+  onRowPointerDown?: (event: ReactPointerEvent, productId: string) => void;
+  onRowPointerUp?: (event: ReactPointerEvent) => void;
+  onRowPointerCancel?: (event: ReactPointerEvent) => void;
 }
 
 type SortDirection = 'asc' | 'desc' | null;
@@ -62,6 +71,13 @@ export function ProductCardView({
   showStockThreshold = false,
   onThresholdChange,
   suppressStockToasts = false,
+  enableSelection = false,
+  selectedIds,
+  selectionModeActive = false,
+  onRowClick,
+  onRowPointerDown,
+  onRowPointerUp,
+  onRowPointerCancel,
 }: ProductCardViewProps) {
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
   const [displayCount, setDisplayCount] = useState(10);
@@ -95,7 +111,38 @@ export function ProductCardView({
   }, [products.length]);
 
   useEffect(() => {
-    setLocalProducts(products);
+    setLocalProducts((prev) => {
+      if (prev.length !== products.length) return products;
+
+      let changed = false;
+      const next = products.map((nextItem, index) => {
+        const prevItem = prev[index] as any;
+        const prevId = prevItem?.id ?? prevItem?.product_id;
+        const nextId = (nextItem as any)?.id ?? (nextItem as any)?.product_id;
+
+        if (prevId !== nextId) {
+          changed = true;
+          return nextItem;
+        }
+
+        const priceChanged = prevItem?.price !== (nextItem as any)?.price;
+        const calcChanged = prevItem?.calculated_data !== (nextItem as any)?.calculated_data;
+        const inStockChanged = prevItem?.in_my_stock !== (nextItem as any)?.in_my_stock;
+
+        if (!priceChanged && !calcChanged && !inStockChanged) {
+          return prevItem;
+        }
+
+        changed = true;
+        return {
+          ...nextItem,
+          quantity: prevItem?.quantity ?? (nextItem as any)?.quantity,
+          stock_threshold: prevItem?.stock_threshold ?? (nextItem as any)?.stock_threshold,
+        };
+      });
+
+      return changed ? next : prev;
+    });
   }, [products]);
 
   const toggleCard = (productId: string) => {
@@ -380,7 +427,25 @@ export function ProductCardView({
       {/* Grid de cards sin contenedor de scroll */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {visibleProducts.map((product) => {
-          const isExpanded = expandedCards.has(product.id);
+          const productId = String(product.id ?? product.product_id ?? "");
+          const isExpanded = expandedCards.has(productId);
+          const isSelected = Boolean(enableSelection && productId && selectedIds?.has(productId));
+          const handleCardClick = (event: ReactMouseEvent) => {
+            if (!enableSelection || !onRowClick || !productId) return;
+            onRowClick(event, productId);
+          };
+          const handleCardPointerDown = (event: ReactPointerEvent) => {
+            if (!enableSelection || !onRowPointerDown || !productId) return;
+            onRowPointerDown(event, productId);
+          };
+          const handleCardPointerUp = (event: ReactPointerEvent) => {
+            if (!enableSelection || !onRowPointerUp) return;
+            onRowPointerUp(event);
+          };
+          const handleCardPointerCancel = (event: ReactPointerEvent) => {
+            if (!enableSelection || !onRowPointerCancel) return;
+            onRowPointerCancel(event);
+          };
           const inMyStockCard = Boolean(product.in_my_stock);
 
           const isLowStockCard =
@@ -390,7 +455,27 @@ export function ProductCardView({
             (product.quantity ?? 0) < (product.stock_threshold ?? 0);
 
           return (
-            <Card key={product.id} className="flex flex-col relative group">
+            <Card
+              key={productId}
+              className={cn(
+                "flex flex-col relative group",
+                enableSelection && "cursor-pointer",
+                selectionModeActive && "transition-shadow",
+                isSelected && "ring-2 ring-primary/60 border-primary/60",
+              )}
+              data-selected={isSelected ? "true" : "false"}
+              onClick={enableSelection ? handleCardClick : undefined}
+              onPointerDown={enableSelection ? handleCardPointerDown : undefined}
+              onPointerUp={enableSelection ? handleCardPointerUp : undefined}
+              onPointerCancel={enableSelection ? handleCardPointerCancel : undefined}
+            >
+              {isSelected && (
+                <div className="absolute left-2 top-2 z-10">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary">
+                    <Check className="h-4 w-4 text-white" />
+                  </span>
+                </div>
+              )}
               <CardHeader className="pb-3">
                 <div className="space-y-2">
                   {keyFields.map((field) => {
@@ -531,7 +616,7 @@ export function ProductCardView({
                 {otherFields.length > 0 && (
                   <Collapsible
                     open={isExpanded}
-                    onOpenChange={() => toggleCard(product.id)}
+                    onOpenChange={() => toggleCard(productId)}
                   >
                     <CollapsibleTrigger asChild>
                       <Button variant="ghost" size="sm" className="w-full mb-2">

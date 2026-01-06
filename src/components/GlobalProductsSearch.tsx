@@ -19,7 +19,7 @@ interface GlobalProductSearchProps {
   isOnline: boolean;
   lists: any[];
   suppliers: any[];
-  onAddToRequest: (product: any, mappingConfig?: any) => void;
+  onAddToRequest: (product: any, mappingConfig?: any, options?: { silent?: boolean }) => void;
   defaultViewMode?: "table" | "card";
   onLoadMore?: () => void;
   hasMore?: boolean;
