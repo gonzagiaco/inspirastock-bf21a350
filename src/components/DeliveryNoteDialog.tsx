@@ -184,8 +184,8 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
     const priceCol = mappingConfig?.delivery_note_price_column;
 
     const resolved = await resolveDeliveryNoteUnitPrice(priceCol, mappingConfig, { price: indexRow?.price }, { indexRow, localProductRow });
-    // Usar forComparison para detección de "precio antiguo" - ignora conversión FX
-    return resolved?.forComparison ?? resolved?.current ?? fallback;
+    // Usar current - el precio actual incluyendo conversión FX
+    return resolved ?? fallback;
   };
 
   useEffect(() => {
