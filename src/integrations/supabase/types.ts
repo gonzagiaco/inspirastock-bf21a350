@@ -758,6 +758,10 @@ export type Database = {
         Args: { base_price: number; dollar_rate: number }
         Returns: number
       }
+      apply_preserved_fx_conversion: {
+        Args: { p_fx_meta: Json; p_mapping: Json; p_new_calc: Json }
+        Returns: Json
+      }
       bulk_adjust_stock: { Args: { p_adjustments: Json }; Returns: Json }
       calculate_price_with_modifiers: {
         Args: {
