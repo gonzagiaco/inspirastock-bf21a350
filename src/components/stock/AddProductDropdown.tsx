@@ -70,7 +70,7 @@ export function AddProductDropdown({
   if (showRemoveFromStock) {
     return (
       <TooltipProvider delayDuration={300}>
-        <div className="flex gap-1">
+        <div className="flex gap-1" data-interactive="true">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button 
@@ -120,7 +120,7 @@ export function AddProductDropdown({
   // Lista de productos: mostrar dos botones separados
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex gap-1">
+      <div className="flex gap-1" data-interactive="true">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button 

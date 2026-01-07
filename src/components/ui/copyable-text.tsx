@@ -10,6 +10,7 @@ interface CopyableTextProps {
 
 export function CopyableText({ children, textToCopy, className }: CopyableTextProps) {
   const [copied, setCopied] = useState(false);
+  const [forceOpen, setForceOpen] = useState(false);
 
   const handleCopy = useCallback(
     async (e: MouseEvent) => {
@@ -20,7 +21,12 @@ export function CopyableText({ children, textToCopy, className }: CopyableTextPr
       try {
         await navigator.clipboard.writeText(String(text));
         setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
+        setForceOpen(true);
+        
+        setTimeout(() => {
+          setCopied(false);
+          setForceOpen(false);
+        }, 2000);
       } catch (error) {
         console.error("Error al copiar:", error);
       }
@@ -30,7 +36,7 @@ export function CopyableText({ children, textToCopy, className }: CopyableTextPr
 
   return (
     <TooltipProvider delayDuration={200}>
-      <Tooltip>
+      <Tooltip open={forceOpen || undefined}>
         <TooltipTrigger asChild>
           <span
             onClick={handleCopy}
