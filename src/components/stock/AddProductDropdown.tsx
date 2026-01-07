@@ -76,7 +76,11 @@ export function AddProductDropdown({
               <Button 
                 size="sm" 
                 variant="outline" 
-                onClick={() => onAddToRequest(product, mappingConfig)}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAddToRequest(product, mappingConfig);
+                }}
                 className="flex-1"
               >
                 <ShoppingCart className="h-4 w-4" />
@@ -93,7 +97,11 @@ export function AddProductDropdown({
               <Button 
                 size="sm" 
                 variant="outline" 
-                onClick={handleRemoveFromStock}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRemoveFromStock();
+                }}
                 className="text-destructive hover:text-destructive hover:bg-destructive/10"
               >
                 <Trash2 className="h-4 w-4" />
@@ -118,7 +126,11 @@ export function AddProductDropdown({
             <Button 
               size="sm" 
               variant="outline" 
-              onClick={() => onAddToRequest(product, mappingConfig)}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onAddToRequest(product, mappingConfig);
+              }}
               className="flex-1"
             >
               <ShoppingCart className="h-4 w-4" />
@@ -136,8 +148,14 @@ export function AddProductDropdown({
               <Button
                 size="sm"
                 variant="outline"
-                onPointerDown={() => setHasBeenAddedToStock(true)}
-                onClick={handleAddToStock}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  setHasBeenAddedToStock(true);
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleAddToStock();
+                }}
                 disabled={shouldDisableAddToStock}
                 className={
                   shouldDisableAddToStock ? "opacity-50 cursor-not-allowed" : "text-primary hover:text-primary"

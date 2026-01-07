@@ -13,6 +13,7 @@ import { StockThresholdCell } from "./stock/StockThresholdCell";
 import { AddProductDropdown } from "./stock/AddProductDropdown";
 import { normalizeRawPrice, formatARS } from "@/utils/numberParser";
 import { cn } from "@/lib/utils";
+import { CopyableText } from "@/components/ui/copyable-text";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -229,12 +230,18 @@ export function ProductCardView({
 
     if (isNumericField) {
       const parsed = normalizeRawPrice(value);
-      return parsed != null ? <span className="flex items-center gap-1.5">{formatARS(parsed)}</span> : "-";
+      if (parsed != null) {
+        const display = formatARS(parsed);
+        return <CopyableText textToCopy={display}><span className="flex items-center gap-1.5">{display}</span></CopyableText>;
+      }
+      return "-";
     }
     if (type === "date" && value instanceof Date) {
-      return value.toLocaleDateString("es-AR");
+      const display = value.toLocaleDateString("es-AR");
+      return <CopyableText textToCopy={display}>{display}</CopyableText>;
     }
-    return String(value);
+    const display = String(value);
+    return <CopyableText textToCopy={display}>{display}</CopyableText>;
   };
 
   // Función para alternar el orden de una columna

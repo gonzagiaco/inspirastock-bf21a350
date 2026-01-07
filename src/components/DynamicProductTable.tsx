@@ -29,7 +29,7 @@ import { useListProducts } from "@/hooks/useListProducts";
 import { useDebounce } from "@/hooks/useDebounce";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { addToMyStock } from "@/lib/localDB";
+import { addToMyStock, localDB } from "@/lib/localDB";
 import {
   convertUsdToArsForProducts,
   deleteColumnsFromList,
@@ -47,6 +47,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { useRequestCartStore } from "@/stores/requestCartStore";
+import { CopyableText } from "@/components/ui/copyable-text";
 
 interface DynamicProductTableProps {
   listId: string;
@@ -80,6 +82,7 @@ export const DynamicProductTable = ({
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
   const { columnVisibility, columnOrder, columnPinning, viewMode: storeViewMode, setViewMode } = useProductListStore();
+  const { requestList, updateItemPrice } = useRequestCartStore();
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedColumnKeys, setSelectedColumnKeys] = useState<Set<string>>(new Set());
@@ -492,6 +495,36 @@ export const DynamicProductTable = ({
     }
   };
 
+  // Helper function to update cart prices after USD/ARS conversion
+  const updateCartPricesAfterConversion = async (productIds: string[]) => {
+    const cartPriceCol = mappingConfig?.cart_price_column;
+    
+    for (const productId of productIds) {
+      // Check if product is in the cart
+      const inCart = requestList.some((item) => item.productId === productId);
+      if (!inCart) continue;
+
+      // Get the updated price from the index
+      const indexRecord = await localDB.dynamic_products_index.where({ product_id: productId }).first();
+      if (!indexRecord) continue;
+
+      let newPrice: number | null = null;
+      
+      // Priority: cart_price_column from calculated_data, then from index price
+      if (cartPriceCol && indexRecord.calculated_data && cartPriceCol in (indexRecord.calculated_data as any)) {
+        newPrice = normalizeRawPrice((indexRecord.calculated_data as any)[cartPriceCol]);
+      }
+      
+      if (newPrice == null && indexRecord.price != null) {
+        newPrice = normalizeRawPrice(indexRecord.price);
+      }
+
+      if (newPrice != null) {
+        updateItemPrice(productId, newPrice);
+      }
+    }
+  };
+
   const handleBulkConvertUsdToArs = async () => {
     if (!selectedProducts.length) return;
     setIsBulkWorking(true);
@@ -507,6 +540,9 @@ export const DynamicProductTable = ({
         toast.error("No hay dólar oficial configurado para convertir");
         return;
       }
+
+      // Update cart prices for converted products
+      await updateCartPricesAfterConversion(selectedProducts.map((p) => p.id));
 
       toast.success(result.updated === 1 ? "Precio convertido a ARS" : `${result.updated} productos convertidos a ARS`, {
         description: `Dólar oficial: $${result.dollarRate.toFixed(2)}`,
@@ -536,8 +572,11 @@ export const DynamicProductTable = ({
         mappingConfig,
       });
 
+      // Update cart prices for reverted products
+      await updateCartPricesAfterConversion(selectedProducts.map((p) => p.id));
+
       toast.success(
-        result.reverted === 1 ? "ConversiÇün revertida a USD" : `${result.reverted} productos revertidos a USD`,
+        result.reverted === 1 ? "Conversión revertida a USD" : `${result.reverted} productos revertidos a USD`,
       );
 
       queryClient.invalidateQueries({ queryKey: ["list-products", listId], exact: false });
@@ -548,7 +587,7 @@ export const DynamicProductTable = ({
       clearSelection();
     } catch (e: any) {
       console.error("bulk revert ARS→USD error:", e);
-      toast.error(e?.message || "Error al revertir conversiÇün");
+      toast.error(e?.message || "Error al revertir conversión");
     } finally {
       setIsBulkWorking(false);
     }
@@ -583,6 +622,9 @@ export const DynamicProductTable = ({
         toast.error("No hay dólar oficial configurado para convertir");
         return;
       }
+
+      // Update cart prices for converted products
+      await updateCartPricesAfterConversion(products.map((p) => p.id));
 
       const skipped = result.skippedAlreadyConverted;
       toast.success(
@@ -627,6 +669,9 @@ export const DynamicProductTable = ({
         mappingConfig,
         targetKeys,
       });
+
+      // Update cart prices for reverted products
+      await updateCartPricesAfterConversion(products.map((p) => p.id));
 
       toast.success(
         result.reverted === 1 ? "Conversión revertida a USD" : `${result.reverted} productos revertidos a USD`,
@@ -911,13 +956,13 @@ export const DynamicProductTable = ({
             const numericValue = normalizeRawPrice(value);
             if (numericValue !== null) {
               const display = formatARS(numericValue);
-              return display;
+              return <CopyableText textToCopy={display}>{display}</CopyableText>;
             }
           }
 
           // fallback para columnas no numéricas o valores no convertibles
           const display = String(value);
-          return display;
+          return <CopyableText textToCopy={display}>{display}</CopyableText>;
         },
         meta: {
           isStandard: schema.isStandard,
