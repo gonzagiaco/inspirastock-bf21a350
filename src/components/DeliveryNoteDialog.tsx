@@ -20,7 +20,7 @@ import { localDB } from "@/lib/localDB";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useProductLists } from "@/hooks/useProductLists";
 import { MappingConfig } from "@/components/suppliers/ListConfigurationView";
-import { resolveDeliveryNoteUnitPrice } from "@/utils/deliveryNotePricing";
+
 
 const deliveryNoteSchema = z.object({
   customerName: z.string().min(1, "Nombre requerido").max(100),
@@ -182,21 +182,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
     return row?.product_id ? String(row.product_id) : null;
   };
 
-  const resolveCurrentUnitPrice = async (productId: string | undefined, productCode: string, fallback: number) => {
-    const resolvedProductId = productId ?? (await resolveProductIdByCode(productCode));
-    if (!resolvedProductId) return fallback;
-
-    const indexRow = await localDB.dynamic_products_index.where("product_id").equals(resolvedProductId).first();
-    const localProductRow = await localDB.dynamic_products.get(resolvedProductId);
-    const listId =
-      indexRow?.list_id != null ? String(indexRow.list_id) : localProductRow?.list_id != null ? String(localProductRow.list_id) : null;
-
-    const mappingConfig = listId ? mappingConfigByListId.get(listId) : undefined;
-    const priceCol = mappingConfig?.delivery_note_price_column;
-
-    const resolved = await resolveDeliveryNoteUnitPrice(priceCol, mappingConfig, { price: indexRow?.price }, { indexRow, localProductRow });
-    return resolved ?? fallback;
-  };
+  // Removed: resolveCurrentUnitPrice - no longer needed since we use column-based detection (isOldPriceItem)
 
   // Removed: useEffect for currentUnitPriceByKey - now using column-based detection instead of value-based
 
@@ -338,6 +324,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
 
     const resolvedProductId = baseLine.productId ?? (await resolveProductIdByCode(baseLine.productCode));
 
+    // Verificar stock disponible
     if (resolvedProductId) {
       const availableForEdit = await getAvailableForEdit(resolvedProductId);
       const currentTotalQuantity = currentItems
@@ -350,36 +337,11 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
       }
     }
 
-    const currentPrice = await resolveCurrentUnitPrice(resolvedProductId, baseLine.productCode, baseLine.unitPrice);
-
-    setItems((prev) => {
-      const sameProduct = (i: CartItem) =>
-        resolvedProductId
-          ? i.productId === resolvedProductId || (!i.productId && i.productCode === baseLine.productCode)
-          : i.productCode === baseLine.productCode;
-
-      if (samePrice(currentPrice, baseLine.unitPrice)) {
-        return prev.map((i) => (i.lineId === baseLine.lineId ? { ...i, quantity: i.quantity + 1 } : i));
-      }
-
-      const existingAtCurrentPrice = prev.find((i) => sameProduct(i) && samePrice(i.unitPrice, currentPrice));
-      if (existingAtCurrentPrice) {
-        return prev.map((i) =>
-          i.lineId === existingAtCurrentPrice.lineId ? { ...i, quantity: i.quantity + 1 } : i,
-        );
-      }
-
-      return [
-        ...prev,
-        {
-          ...baseLine,
-          lineId: createLineId(),
-          productId: resolvedProductId ?? baseLine.productId,
-          quantity: 1,
-          unitPrice: currentPrice,
-        },
-      ];
-    });
+    // Simplemente incrementar la cantidad del item existente
+    // La detección de "precio antiguo" se maneja con isOldPriceItem (basado en columnas)
+    setItems((prev) =>
+      prev.map((i) => (i.lineId === lineId ? { ...i, quantity: i.quantity + 1 } : i))
+    );
   };
 
   const calculateTotal = () => items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
