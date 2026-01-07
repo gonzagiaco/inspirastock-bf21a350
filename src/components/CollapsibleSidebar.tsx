@@ -20,6 +20,12 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { supabase } from "@/integrations/supabase/client";
 import { isOnline, localDB } from "@/lib/localDB";
 import { toast } from "sonner";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const ARG_TIMEZONE = "America/Argentina/Buenos_Aires";
 
@@ -335,54 +341,76 @@ const CollapsibleSidebar = () => {
 
         {/* User Profile */}
         <div className={`mt-auto ${isCollapsed ? "space-y-2" : "space-y-4"}`}>
-          <div
-            className={`glassmorphism rounded-xl ${isCollapsed ? "p-2" : "p-3"}`}
-            title={
-              dollarRate
-                ? `Dólar oficial: $${dollarRate.toFixed(2)}${displayDollarUpdatedAt ? ` (Actualizado: ${displayDollarUpdatedAt})` : ""}`
-                : "Dólar oficial no disponible"
-            }
-          >
-            <div
-              className={`flex items-center ${isCollapsed ? "justify-center" : "justify-between"} gap-2`}
-            >
-              {!isCollapsed && (
+          {isCollapsed ? (
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="glassmorphism rounded-xl p-2">
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleRefreshDollar}
+                        disabled={isRefreshingDollar}
+                        className="rounded-md p-1 hover:bg-primary/10 disabled:opacity-60"
+                        aria-label="Actualizar dólar oficial"
+                      >
+                        <RefreshCw className={`h-4 w-4 ${isRefreshingDollar ? "animate-spin" : ""}`} />
+                      </button>
+                    </div>
+                    <div className="mt-1 text-center text-xs font-semibold">
+                      {dollarRate ? (
+                        <span className="text-foreground">${dollarRate.toFixed(2)}</span>
+                      ) : (
+                        <span className="text-muted-foreground">--</span>
+                      )}
+                    </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  <p>
+                    Dólar oficial: ${dollarRate?.toFixed(2) ?? "--"}
+                    {displayDollarUpdatedAt && ` (Actualizado: ${displayDollarUpdatedAt})`}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          ) : (
+            <div className="glassmorphism rounded-xl p-3">
+              <div className="flex items-center justify-between gap-2">
                 <span className="text-xs text-muted-foreground">Dólar oficial</span>
-              )}
-              <button
-                type="button"
-                onClick={handleRefreshDollar}
-                disabled={isRefreshingDollar}
-                className="rounded-md p-1 hover:bg-primary/10 disabled:opacity-60"
-                aria-label="Actualizar dólar oficial"
-              >
-                <RefreshCw className={`h-4 w-4 ${isRefreshingDollar ? "animate-spin" : ""}`} />
-              </button>
-            </div>
-            <div
-              className={`mt-1 ${
-                isCollapsed ? "text-center text-xs font-semibold" : "flex items-baseline gap-2"
-              }`}
-            >
-              {dollarRate ? (
-                <span className={isCollapsed ? "text-foreground" : "text-lg font-semibold text-foreground"}>
-                  ${dollarRate.toFixed(2)}
-                </span>
-              ) : (
-                <span className={isCollapsed ? "text-muted-foreground" : "text-sm text-muted-foreground"}>
-                  No disponible
-                </span>
-              )}
-              {!isCollapsed && displayDollarUpdatedAt && (
-                <span
-                  className="text-[10px] text-muted-foreground truncate"
-                  title={`Actualizado: ${displayDollarUpdatedAt}`}
+                <button
+                  type="button"
+                  onClick={handleRefreshDollar}
+                  disabled={isRefreshingDollar}
+                  className="rounded-md p-1 hover:bg-primary/10 disabled:opacity-60"
+                  aria-label="Actualizar dólar oficial"
                 >
-                  {displayDollarUpdatedAt}
-                </span>
-              )}
+                  <RefreshCw className={`h-4 w-4 ${isRefreshingDollar ? "animate-spin" : ""}`} />
+                </button>
+              </div>
+              <div className="mt-1 flex items-baseline gap-2">
+                {dollarRate ? (
+                  <span className="text-lg font-semibold text-foreground">${dollarRate.toFixed(2)}</span>
+                ) : (
+                  <span className="text-sm text-muted-foreground">No disponible</span>
+                )}
+                {displayDollarUpdatedAt && (
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="text-[10px] text-muted-foreground truncate cursor-help">
+                          {displayDollarUpdatedAt}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        <p>Actualizado: {displayDollarUpdatedAt}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
             </div>
-          </div>
+          )}
           <div className={`glassmorphism rounded-xl ${isCollapsed ? "p-2" : "p-4"}`}>
             {isCollapsed ? (
               <div className="relative">
