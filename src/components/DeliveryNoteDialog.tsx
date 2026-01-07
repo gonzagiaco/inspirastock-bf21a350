@@ -205,7 +205,29 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
         next[key] = await resolveCurrentUnitPrice(info.productId, info.productCode, info.fallback);
       }
 
-      if (!cancelled) setCurrentUnitPriceByKey(next);
+      if (cancelled) return;
+
+      setCurrentUnitPriceByKey(next);
+
+      // Sincronizar items con precios actuales (para conversión FX)
+      // Esto evita que se marquen como "precio antiguo" items que solo cambiaron por conversión
+      setItems((prevItems) => {
+        let hasChanges = false;
+        const updatedItems = prevItems.map((item) => {
+          const key = getItemPriceKey(item);
+          const currentPrice = next[key];
+
+          // Si el precio actual es diferente, actualizar el item
+          if (typeof currentPrice === "number" && !samePrice(item.unitPrice, currentPrice)) {
+            hasChanges = true;
+            return { ...item, unitPrice: currentPrice };
+          }
+          return item;
+        });
+
+        // Solo retornar nuevo array si hay cambios para evitar re-renders innecesarios
+        return hasChanges ? updatedItems : prevItems;
+      });
     };
 
     void run();
