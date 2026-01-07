@@ -60,8 +60,10 @@ export type Database = {
           created_at: string | null
           delivery_note_id: string
           id: string
+          price_column_key_used: string | null
           product_code: string
           product_id: string | null
+          product_list_id: string | null
           product_name: string
           quantity: number
           subtotal: number | null
@@ -71,8 +73,10 @@ export type Database = {
           created_at?: string | null
           delivery_note_id: string
           id?: string
+          price_column_key_used?: string | null
           product_code: string
           product_id?: string | null
+          product_list_id?: string | null
           product_name: string
           quantity: number
           subtotal?: number | null
@@ -82,8 +86,10 @@ export type Database = {
           created_at?: string | null
           delivery_note_id?: string
           id?: string
+          price_column_key_used?: string | null
           product_code?: string
           product_id?: string | null
+          product_list_id?: string | null
           product_name?: string
           quantity?: number
           subtotal?: number | null

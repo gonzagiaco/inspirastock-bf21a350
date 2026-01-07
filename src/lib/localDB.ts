@@ -120,6 +120,8 @@ interface DeliveryNoteItemDB {
   unit_price: number;
   subtotal: number;
   created_at: string;
+  product_list_id?: string | null;
+  price_column_key_used?: string | null;
 }
 
 interface RequestItemDB {
@@ -309,6 +311,25 @@ class LocalDatabase extends Dexie {
       my_stock_products: "id, user_id, product_id, quantity, stock_threshold, code, name, price",
       delivery_notes: "id, user_id, client_id, customer_name, status, issue_date",
       delivery_note_items: "id, delivery_note_id, product_id",
+      settings: "key, updated_at",
+      request_items: "id, user_id, product_id",
+      stock_items: "id, user_id, code, name, category, supplier_id",
+      pending_operations: "++id, table_name, timestamp, record_id, product_id, operation_type, [table_name+record_id+operation_type]",
+      tokens: "userId, updatedAt",
+      id_mappings: "temp_id, real_id, table_name",
+      stock_compensations: "++id, operation_id, product_id",
+    });
+
+    // Version 11: agregar product_list_id y price_column_key_used a delivery_note_items
+    this.version(11).stores({
+      suppliers: "id, user_id, name",
+      clients: "id, user_id, name",
+      product_lists: "id, user_id, supplier_id, name",
+      dynamic_products_index: "id, user_id, list_id, product_id, code, name, in_my_stock, stock_threshold",
+      dynamic_products: "id, user_id, list_id, code, name, stock_threshold",
+      my_stock_products: "id, user_id, product_id, quantity, stock_threshold, code, name, price",
+      delivery_notes: "id, user_id, client_id, customer_name, status, issue_date",
+      delivery_note_items: "id, delivery_note_id, product_id, product_list_id",
       settings: "key, updated_at",
       request_items: "id, user_id, product_id",
       stock_items: "id, user_id, code, name, category, supplier_id",
@@ -1114,6 +1135,8 @@ async function executeDeliveryNoteUpdateWithItems(noteId: string, data: any): Pr
       product_name: item.product_name,
       quantity: item.quantity,
       unit_price: item.unit_price,
+      product_list_id: item.product_list_id ?? null,
+      price_column_key_used: item.price_column_key_used ?? null,
     }));
 
     const { error: insertError } = await supabase.from("delivery_note_items").insert(itemsToInsert);

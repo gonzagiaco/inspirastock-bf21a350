@@ -12,7 +12,7 @@ import { localDB } from "@/lib/localDB";
 import { supabase } from "@/integrations/supabase/client";
 
 interface ProductSearchProps {
-  onSelect: (product: { id?: string; listId?: string; code: string; name: string; price: number }) => void;
+  onSelect: (product: { id?: string; listId?: string; code: string; name: string; price: number; priceColumnKeyUsed?: string | null }) => void;
 }
 
 const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
@@ -436,12 +436,18 @@ const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
       }
     }
 
+    // Determinar la columna de precio usada
+    const priceColumnKeyUsed = mappingConfig?.delivery_note_price_column 
+      ?? mappingConfig?.price_primary_key 
+      ?? "price";
+
     onSelect({
       id: product.product_id,
       listId: product.list_id,
       code: product.code || "SIN-CODIGO",
       name: productName,
       price: productPrice,
+      priceColumnKeyUsed,
     });
 
     setQuery("");

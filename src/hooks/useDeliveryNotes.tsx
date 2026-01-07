@@ -127,6 +127,8 @@ export const useDeliveryNotes = () => {
               unitPrice: Number(item.unit_price),
               subtotal: Number(item.subtotal),
               createdAt: item.created_at,
+              productListId: item.product_list_id,
+              priceColumnKeyUsed: item.price_column_key_used,
             })),
         })) as DeliveryNote[];
       }
@@ -169,6 +171,8 @@ export const useDeliveryNotes = () => {
           unitPrice: Number(item.unit_price),
           subtotal: Number(item.subtotal),
           createdAt: item.created_at,
+          productListId: item.product_list_id,
+          priceColumnKeyUsed: item.price_column_key_used,
         })),
       })) as DeliveryNote[];
     },
@@ -206,6 +210,8 @@ export const useDeliveryNotes = () => {
           quantity: item.quantity,
           unit_price: item.unitPrice,
           subtotal: item.quantity * item.unitPrice,
+          product_list_id: item.productListId ?? null,
+          price_column_key_used: item.priceColumnKeyUsed ?? null,
         }));
 
         const id = await createDeliveryNoteOffline(noteData, items);
@@ -243,6 +249,8 @@ export const useDeliveryNotes = () => {
           product_name: item.productName,
           quantity: item.quantity,
           unit_price: item.unitPrice,
+          product_list_id: item.productListId ?? null,
+          price_column_key_used: item.priceColumnKeyUsed ?? null,
         })),
       );
 
@@ -290,6 +298,8 @@ export const useDeliveryNotes = () => {
           quantity: item.quantity,
           unit_price: item.unitPrice,
           subtotal: item.quantity * item.unitPrice,
+          product_list_id: item.productListId ?? null,
+          price_column_key_used: item.priceColumnKeyUsed ?? null,
         }));
 
         const offlineUpdates: any = {};
@@ -393,6 +403,8 @@ export const useDeliveryNotes = () => {
             product_name: item.productName,
             quantity: item.quantity,
             unit_price: item.unitPrice,
+            product_list_id: item.productListId ?? null,
+            price_column_key_used: item.priceColumnKeyUsed ?? null,
           })),
         );
 

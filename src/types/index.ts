@@ -108,6 +108,8 @@ export interface DeliveryNoteItem {
   unitPrice: number;
   subtotal: number;
   createdAt: string;
+  productListId?: string | null;
+  priceColumnKeyUsed?: string | null;
 }
 
 export interface CreateDeliveryNoteInput {
@@ -125,6 +127,8 @@ export interface CreateDeliveryNoteInput {
     productName: string;
     quantity: number;
     unitPrice: number;
+    productListId?: string | null;
+    priceColumnKeyUsed?: string | null;
   }[];
 }
 

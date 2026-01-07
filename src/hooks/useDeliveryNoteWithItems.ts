@@ -71,6 +71,8 @@ export function useDeliveryNoteWithItems(noteId: string | null, enabled: boolean
           unitPrice: Number(item.unit_price),
           subtotal: Number(item.subtotal),
           createdAt: item.created_at,
+          productListId: item.product_list_id,
+          priceColumnKeyUsed: item.price_column_key_used,
         }));
 
         return { note: { ...note, items }, items };
@@ -128,6 +130,8 @@ export function useDeliveryNoteWithItems(noteId: string | null, enabled: boolean
               unit_price: item.unit_price,
               subtotal: item.subtotal,
               created_at: item.created_at,
+              product_list_id: item.product_list_id,
+              price_column_key_used: item.price_column_key_used,
             }))
           );
         }
@@ -166,6 +170,8 @@ export function useDeliveryNoteWithItems(noteId: string | null, enabled: boolean
         unitPrice: Number(item.unit_price),
         subtotal: Number(item.subtotal),
         createdAt: item.created_at,
+        productListId: item.product_list_id,
+        priceColumnKeyUsed: item.price_column_key_used,
       }));
 
       return { note: { ...note, items }, items };
