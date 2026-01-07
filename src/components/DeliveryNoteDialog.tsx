@@ -50,6 +50,8 @@ interface CartItem {
   productName: string;
   quantity: number;
   unitPrice: number;
+  productListId?: string | null;
+  priceColumnKeyUsed?: string | null;
 }
 
 const createLineId = () => {
@@ -58,7 +60,7 @@ const createLineId = () => {
 };
 
 const samePrice = (a: number, b: number) => Math.abs(a - b) < 0.0001;
-const OLD_PRICE_MESSAGE = "El precio de este producto es antigüo. Utiliza el buscador para agregarlo nuevamente.";
+const OLD_PRICE_COLUMN_MESSAGE = "La columna de precio configurada para remitos cambió. Agrega el producto nuevamente para usar la nueva configuración.";
 
 const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, initialClientId }: DeliveryNoteDialogProps) => {
   const { createDeliveryNote, updateDeliveryNote } = useDeliveryNotes();
@@ -72,20 +74,29 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
   const [clientSearch, setClientSearch] = useState("");
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
 
+  // Helper para obtener la columna de precio efectiva de una lista
+  const getEffectivePriceColumn = (listId: string | undefined | null): string => {
+    if (!listId) return "price";
+    const cfg = mappingConfigByListId.get(listId);
+    return cfg?.delivery_note_price_column ?? cfg?.price_primary_key ?? "price";
+  };
 
-
-  const [currentUnitPriceByKey, setCurrentUnitPriceByKey] = useState<Record<string, number>>({});
-
-  const getItemPriceKey = (item: Pick<CartItem, "productId" | "productCode">) =>
-    item.productId ? `id:${item.productId}` : `code:${item.productCode}`;
-
-  const isOldPriceItem = (item: Pick<CartItem, "productId" | "productCode" | "unitPrice">) => {
-    const currentUnitPrice = currentUnitPriceByKey[getItemPriceKey(item)];
-    return typeof currentUnitPrice === "number" && !samePrice(item.unitPrice, currentUnitPrice);
+  // Detecta si el item usa una columna de precio diferente a la configurada actualmente
+  const isOldPriceItem = (item: CartItem): boolean => {
+    // Si no tenemos metadata, no podemos determinar → NO marcar como antiguo
+    if (!item.productListId || !item.priceColumnKeyUsed) return false;
+    
+    const currentPriceCol = getEffectivePriceColumn(item.productListId);
+    
+    // Normalizar strings para comparación
+    const used = item.priceColumnKeyUsed.trim().toLowerCase();
+    const current = currentPriceCol.trim().toLowerCase();
+    
+    return used !== current;
   };
 
   const showOldPriceToast = () => {
-    toast(OLD_PRICE_MESSAGE, { duration: 5000 });
+    toast(OLD_PRICE_COLUMN_MESSAGE, { duration: 5000 });
   };
 
   const mappingConfigByListId = useMemo(() => {
@@ -184,57 +195,10 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
     const priceCol = mappingConfig?.delivery_note_price_column;
 
     const resolved = await resolveDeliveryNoteUnitPrice(priceCol, mappingConfig, { price: indexRow?.price }, { indexRow, localProductRow });
-    // Usar current - el precio actual incluyendo conversión FX
     return resolved ?? fallback;
   };
 
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-
-    const run = async () => {
-      const unique = new Map<string, { productId?: string; productCode: string; fallback: number }>();
-      for (const item of items) {
-        const key = getItemPriceKey(item);
-        if (unique.has(key)) continue;
-        unique.set(key, { productId: item.productId, productCode: item.productCode, fallback: item.unitPrice });
-      }
-
-      const next: Record<string, number> = {};
-      for (const [key, info] of unique.entries()) {
-        next[key] = await resolveCurrentUnitPrice(info.productId, info.productCode, info.fallback);
-      }
-
-      if (cancelled) return;
-
-      setCurrentUnitPriceByKey(next);
-
-      // Sincronizar items con precios actuales (para conversión FX)
-      // Esto evita que se marquen como "precio antiguo" items que solo cambiaron por conversión
-      setItems((prevItems) => {
-        let hasChanges = false;
-        const updatedItems = prevItems.map((item) => {
-          const key = getItemPriceKey(item);
-          const currentPrice = next[key];
-
-          // Si el precio actual es diferente, actualizar el item
-          if (typeof currentPrice === "number" && !samePrice(item.unitPrice, currentPrice)) {
-            hasChanges = true;
-            return { ...item, unitPrice: currentPrice };
-          }
-          return item;
-        });
-
-        // Solo retornar nuevo array si hay cambios para evitar re-renders innecesarios
-        return hasChanges ? updatedItems : prevItems;
-      });
-    };
-
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, items, mappingConfigByListId]);
+  // Removed: useEffect for currentUnitPriceByKey - now using column-based detection instead of value-based
 
   useEffect(() => {
     if (clientMode !== "existing" || !selectedClient) return;
@@ -275,6 +239,8 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
           productName: item.productName,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
+          productListId: item.productListId,
+          priceColumnKeyUsed: item.priceColumnKeyUsed,
         })) || [],
       );
     } else {
@@ -300,7 +266,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
     }
   }, [note, open, initialClientId, setValue, reset]);
 
-  const handleAddProduct = async (product: { id?: string; listId?: string; code: string; name: string; price: number }) => {
+  const handleAddProduct = async (product: { id?: string; listId?: string; code: string; name: string; price: number; priceColumnKeyUsed?: string | null }) => {
     const normalizedCode = String(product.code || "SIN-CODIGO").trim();
 
     const productId = product.id;
@@ -321,7 +287,9 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
         const sameProduct = productId
           ? i.productId === productId || (!i.productId && i.productCode === normalizedCode)
           : i.productCode === normalizedCode;
-        return sameProduct && samePrice(i.unitPrice, product.price);
+        // También verificar que tenga la misma columna de precio para no mezclar
+        const samePriceColumn = i.priceColumnKeyUsed === product.priceColumnKeyUsed;
+        return sameProduct && samePrice(i.unitPrice, product.price) && samePriceColumn;
       });
 
       if (existingItem) {
@@ -337,6 +305,8 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
           productName: product.name,
           quantity: 1,
           unitPrice: product.price,
+          productListId: product.listId,
+          priceColumnKeyUsed: product.priceColumnKeyUsed,
         },
       ];
     });
@@ -455,6 +425,8 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
         productName: item.productName,
         quantity: item.quantity,
         unitPrice: item.unitPrice,
+        productListId: item.productListId,
+        priceColumnKeyUsed: item.priceColumnKeyUsed,
       })),
     };
 
