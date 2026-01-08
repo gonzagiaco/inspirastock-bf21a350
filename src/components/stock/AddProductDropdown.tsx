@@ -73,8 +73,8 @@ export function AddProductDropdown({
                 variant="outline"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
-                  e.stopPropagation();
                   onAddToRequest(product, mappingConfig);
+                  e.stopPropagation();
                 }}
                 className="flex-1"
               >
@@ -94,8 +94,8 @@ export function AddProductDropdown({
                 variant="outline"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
-                  e.stopPropagation();
                   handleRemoveFromStock();
+                  e.stopPropagation();
                 }}
                 className="text-destructive hover:text-destructive hover:bg-destructive/10"
               >
