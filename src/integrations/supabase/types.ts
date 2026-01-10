@@ -68,8 +68,8 @@ export type Database = {
           product_name: string
           quantity: number
           subtotal: number | null
-          unit_price_base: number | null
           unit_price: number
+          unit_price_base: number | null
         }
         Insert: {
           adjustment_pct?: number | null
@@ -83,8 +83,8 @@ export type Database = {
           product_name: string
           quantity: number
           subtotal?: number | null
-          unit_price_base?: number | null
           unit_price: number
+          unit_price_base?: number | null
         }
         Update: {
           adjustment_pct?: number | null
@@ -98,8 +98,8 @@ export type Database = {
           product_name?: string
           quantity?: number
           subtotal?: number | null
-          unit_price_base?: number | null
           unit_price?: number
+          unit_price_base?: number | null
         }
         Relationships: [
           {
