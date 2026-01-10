@@ -57,6 +57,7 @@ export type Database = {
       }
       delivery_note_items: {
         Row: {
+          adjustment_pct: number | null
           created_at: string | null
           delivery_note_id: string
           id: string
@@ -67,9 +68,11 @@ export type Database = {
           product_name: string
           quantity: number
           subtotal: number | null
+          unit_price_base: number | null
           unit_price: number
         }
         Insert: {
+          adjustment_pct?: number | null
           created_at?: string | null
           delivery_note_id: string
           id?: string
@@ -80,9 +83,11 @@ export type Database = {
           product_name: string
           quantity: number
           subtotal?: number | null
+          unit_price_base?: number | null
           unit_price: number
         }
         Update: {
+          adjustment_pct?: number | null
           created_at?: string | null
           delivery_note_id?: string
           id?: string
@@ -93,6 +98,7 @@ export type Database = {
           product_name?: string
           quantity?: number
           subtotal?: number | null
+          unit_price_base?: number | null
           unit_price?: number
         }
         Relationships: [
@@ -113,6 +119,7 @@ export type Database = {
           customer_name: string
           customer_phone: string | null
           extra_fields: Json | null
+          global_adjustment_pct: number | null
           id: string
           issue_date: string | null
           notes: string | null
@@ -130,6 +137,7 @@ export type Database = {
           customer_name: string
           customer_phone?: string | null
           extra_fields?: Json | null
+          global_adjustment_pct?: number | null
           id?: string
           issue_date?: string | null
           notes?: string | null
@@ -147,6 +155,7 @@ export type Database = {
           customer_name?: string
           customer_phone?: string | null
           extra_fields?: Json | null
+          global_adjustment_pct?: number | null
           id?: string
           issue_date?: string | null
           notes?: string | null

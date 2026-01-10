@@ -8,9 +8,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { QuantityCell } from "./QuantityCell";
 import { StockThresholdCell } from "./StockThresholdCell";
 import { ProductCardView } from "@/components/ProductCardView";
+import { CopyableText } from "@/components/ui/copyable-text";
 import { ColumnSchema, DynamicProduct } from "@/types/productList";
 import { normalizeRawPrice, formatARS } from "@/utils/numberParser";
-import { isOnline, removeFromMyStock } from "@/lib/localDB";
+import { isOnline, localDB, removeFromMyStock } from "@/lib/localDB";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -101,6 +102,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedColumnKeys, setSelectedColumnKeys] = useState<Set<string>>(new Set());
+  const [allRowsSelected, setAllRowsSelected] = useState(false);
   const [menuState, setMenuState] = useState<
     | {
         type: "rows" | "columns";
@@ -109,6 +111,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
       }
     | null
   >(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const mobileActionsRef = useRef<HTMLDivElement | null>(null);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
@@ -153,10 +156,11 @@ export const MyStockListProducts = memo(function MyStockListProducts({
     try {
       // 1. FIRST: Persist to IndexedDB (critical for offline persistence)
       await removeFromMyStock(productId);
-      
+
       // 2. THEN: Update UI optimistically
       onRemoveProduct?.(productId);
-      
+      await syncListCacheFromLocal([productId]);
+
       // 3. Toast feedback
       toast.success("Producto quitado de Mi Stock");
       
@@ -178,6 +182,64 @@ export const MyStockListProducts = memo(function MyStockListProducts({
   const handleThresholdChange = (productId: string, newThreshold: number) => {
     onThresholdChange?.(productId, newThreshold);
   };
+
+  const syncListCacheFromLocal = useCallback(
+    async (productIds: string[]) => {
+      const ids = productIds.filter(Boolean);
+      if (!ids.length) return;
+
+      const [indexRows, stockRows] = await Promise.all([
+        localDB.dynamic_products_index.where("product_id").anyOf(ids).toArray(),
+        localDB.my_stock_products.where("product_id").anyOf(ids).toArray(),
+      ]);
+
+      const indexMap = new Map(indexRows.map((row: any) => [row.product_id, row]));
+      const stockMap = new Map(stockRows.map((row: any) => [row.product_id, row]));
+      const idSet = new Set(ids);
+
+      queryClient.setQueriesData({ queryKey: ["list-products", listId] }, (old: any) => {
+        if (!old?.pages) return old;
+        return {
+          ...old,
+          pages: old.pages.map((page: any) => ({
+            ...page,
+            data: (page.data ?? []).map((item: any) => {
+              const indexRow = indexMap.get(item.product_id);
+              if (!indexRow) return item;
+              const stockRow = stockMap.get(item.product_id);
+              return {
+                ...item,
+                price: indexRow.price ?? item.price,
+                quantity: indexRow.quantity ?? item.quantity,
+                stock_threshold: stockRow?.stock_threshold ?? indexRow.stock_threshold ?? item.stock_threshold,
+                calculated_data: indexRow.calculated_data ?? item.calculated_data,
+                in_my_stock: Boolean(stockRow),
+              };
+            }),
+          })),
+        };
+      });
+
+      queryClient.setQueriesData({ queryKey: ["my-stock"] }, (old: any) => {
+        if (!Array.isArray(old)) return old;
+        return old
+          .filter((item: any) => !idSet.has(item.product_id) || stockMap.has(item.product_id))
+          .map((item: any) => {
+            const indexRow = indexMap.get(item.product_id);
+            if (!indexRow) return item;
+            const stockRow = stockMap.get(item.product_id);
+            return {
+              ...item,
+              price: indexRow.price ?? item.price,
+              quantity: stockRow?.quantity ?? indexRow.quantity ?? item.quantity,
+              stock_threshold: stockRow?.stock_threshold ?? item.stock_threshold,
+              calculated_data: indexRow.calculated_data ?? item.calculated_data,
+            };
+          });
+      });
+    },
+    [listId, queryClient],
+  );
 
   // Process schema: only mark quantity as isStandard (fixed)
   const processedSchema: ColumnSchema[] = useMemo(() => {
@@ -449,12 +511,12 @@ export const MyStockListProducts = memo(function MyStockListProducts({
             const numericValue = normalizeRawPrice(value);
             if (numericValue !== null) {
               const display = formatARS(numericValue);
-              return display;
+              return <CopyableText textToCopy={display}>{display}</CopyableText>;
             }
           }
 
           const display = String(value);
-          return display;
+          return <CopyableText textToCopy={display}>{display}</CopyableText>;
         },
         meta: { isStandard: schema.isStandard, visible: isVisible },
       } as ColumnDef<any>);
@@ -540,7 +602,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
     () => selectedProducts.filter((p) => Boolean((p as any)?.calculated_data?.__fx_usd_ars__at)).length,
     [selectedProducts],
   );
-  const anySelectedFxConverted = selectedFxConvertedCount > 0;
+  const anySelectedFxConverted = allRowsSelected ? true : selectedFxConvertedCount > 0;
 
   const isInteractiveTarget = (target: EventTarget | null) => {
     if (!(target instanceof Element)) return false;
@@ -552,8 +614,19 @@ export const MyStockListProducts = memo(function MyStockListProducts({
     return Boolean(target.closest("input, textarea, [contenteditable='true']"));
   };
 
+  const codeColumnKeys = useMemo(() => {
+    const keys = new Set<string>(["code"]);
+    for (const key of mappingConfig?.code_keys ?? []) {
+      keys.add(key);
+    }
+    return keys;
+  }, [mappingConfig]);
+
   const isSelectableColumn = (columnKey: string) => {
-    return Boolean(columnKey) && columnKey !== "actions" && columnKey !== "quantity";
+    if (!columnKey) return false;
+    if (columnKey === "actions" || columnKey === "quantity" || columnKey === "stock_threshold") return false;
+    if (codeColumnKeys.has(columnKey)) return false;
+    return true;
   };
 
   const isConvertibleColumn = (columnKey: string) => {
@@ -593,10 +666,45 @@ export const MyStockListProducts = memo(function MyStockListProducts({
   };
 
   const clearSelection = useCallback(() => {
+    setAllRowsSelected(false);
     setSelectedRowIds(new Set());
     setSelectedColumnKeys(new Set());
     setMenuState(null);
   }, []);
+
+  useEffect(() => {
+    if (!menuState) {
+      setMenuPosition(null);
+      return;
+    }
+
+    const raf = window.requestAnimationFrame(() => {
+      const menuEl = menuRef.current;
+      if (!menuEl) return;
+
+      const rect = menuEl.getBoundingClientRect();
+      const menuHeight = rect.height || 220;
+      const menuWidth = rect.width || 260;
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+      const margin = 8;
+
+      const shouldOpenUp = menuState.top > viewportHeight / 2;
+      let top = shouldOpenUp ? menuState.top - menuHeight : menuState.top;
+      top = Math.max(margin, Math.min(top, viewportHeight - menuHeight - margin));
+
+      let left = menuState.left;
+      if (left + menuWidth > viewportWidth - margin) {
+        left = Math.max(margin, viewportWidth - menuWidth - margin);
+      }
+
+      setMenuPosition({ top, left });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+    };
+  }, [menuState]);
 
   useEffect(() => {
     if (!menuState && !selectedRowIds.size && !selectedColumnKeys.size) return;
@@ -676,6 +784,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
     (table.getHeaderGroups()[0]?.headers ?? []).map((h) => h.column.id).filter((k) => isSelectableColumn(k));
 
   const selectRowSingle = (productId: string) => {
+    setAllRowsSelected(false);
     setSelectedColumnKeys(new Set());
     setSelectedRowIds(new Set([productId]));
     setMenuState(null);
@@ -683,6 +792,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
   };
 
   const toggleRow = (productId: string) => {
+    setAllRowsSelected(false);
     setSelectedColumnKeys(new Set());
     setSelectedRowIds((prev) => {
       const next = new Set(prev);
@@ -695,6 +805,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
   };
 
   const selectRowRange = (toProductId: string, additive: boolean) => {
+    setAllRowsSelected(false);
     const order = getVisibleRowIds();
     const anchorId = rowAnchorIdRef.current ?? toProductId;
     const fromIndex = order.indexOf(anchorId);
@@ -723,6 +834,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
     const x = e.clientX;
     const y = e.clientY;
     longPressTimerRef.current = window.setTimeout(() => {
+      setAllRowsSelected(false);
       setSelectedColumnKeys(new Set());
       setSelectedRowIds((prev) => (prev.has(productId) ? prev : new Set([productId])));
       if (!isMobile) {
@@ -757,6 +869,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
 
   const selectColumnSingle = (columnKey: string) => {
     if (!isSelectableColumn(columnKey)) return;
+    setAllRowsSelected(false);
     setSelectedRowIds(new Set());
     setSelectedColumnKeys(new Set([columnKey]));
     setMenuState(null);
@@ -765,6 +878,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
 
   const toggleColumn = (columnKey: string) => {
     if (!isSelectableColumn(columnKey)) return;
+    setAllRowsSelected(false);
     setSelectedRowIds(new Set());
     setSelectedColumnKeys((prev) => {
       const next = new Set(prev);
@@ -778,6 +892,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
 
   const selectColumnRange = (toColumnKey: string, additive: boolean) => {
     if (!isSelectableColumn(toColumnKey)) return;
+    setAllRowsSelected(false);
 
     const order = getVisibleSelectableColumnKeys();
     const anchorKey = columnAnchorKeyRef.current ?? toColumnKey;
@@ -803,34 +918,58 @@ export const MyStockListProducts = memo(function MyStockListProducts({
     for (const c of columnSchema) {
       if (c.isStandard) keys.add(c.key);
     }
+    for (const key of mappingConfig?.code_keys ?? []) {
+      keys.add(key);
+    }
     keys.add("code");
     keys.add("name");
     return keys;
-  }, [columnSchema]);
+  }, [columnSchema, mappingConfig]);
 
   const handleBulkAddToCart = () => {
-    if (!selectedProducts.length) return;
-    for (const p of selectedProducts) {
-      onAddToRequest(p, mappingConfig, { silent: true });
-    }
-    toast.success(
-      selectedProducts.length === 1 ? "Producto agregado al carrito" : `${selectedProducts.length} productos agregados al carrito`,
-    );
-    setMenuState(null);
-    clearSelection();
+    if (!selectedProducts.length && !allRowsSelected) return;
+    setIsBulkWorking(true);
+    void (async () => {
+      try {
+        const productsToAdd = allRowsSelected ? transformedProducts : selectedProducts;
+        if (!productsToAdd.length) return;
+        for (const p of productsToAdd) {
+          onAddToRequest(p, mappingConfig, { silent: true });
+        }
+        toast.success(
+          productsToAdd.length === 1
+            ? "Producto agregado al carrito"
+            : `${productsToAdd.length} productos agregados al carrito`,
+        );
+        setMenuState(null);
+        clearSelection();
+      } catch (error: any) {
+        console.error("bulk addToCart error:", error);
+        toast.error(error?.message || "Error al agregar productos al carrito");
+      } finally {
+        setIsBulkWorking(false);
+      }
+    })();
   };
 
   const selectedMode: "rows" | "columns" | null =
-    selectedRowIds.size > 0 ? "rows" : selectedColumnKeys.size > 0 ? "columns" : null;
+    allRowsSelected || selectedRowIds.size > 0 ? "rows" : selectedColumnKeys.size > 0 ? "columns" : null;
   const isInSelectionMode = selectedMode != null;
   const selectionLabel =
     selectedMode === "rows"
-      ? `${selectedRowIds.size} producto${selectedRowIds.size === 1 ? "" : "s"} seleccionado${
-          selectedRowIds.size === 1 ? "" : "s"
-        }`
+      ? allRowsSelected
+        ? "Todos los productos de la lista seleccionados"
+        : `${selectedRowIds.size} producto${selectedRowIds.size === 1 ? "" : "s"} seleccionado${
+            selectedRowIds.size === 1 ? "" : "s"
+          }`
       : `${selectedColumnKeys.size} columna${selectedColumnKeys.size === 1 ? "" : "s"} seleccionada${
           selectedColumnKeys.size === 1 ? "" : "s"
         }`;
+  const deleteRowsDescription = allRowsSelected
+    ? "Esta acción quitará todos los productos de Mi Stock. No se puede deshacer."
+    : `Esta acción quitará ${selectedRowIds.size} producto${
+        selectedRowIds.size === 1 ? "" : "s"
+      } de Mi Stock. No se puede deshacer.`;
   const showCardSelectionHeader = isInSelectionMode && effectiveViewMode === "cards";
   const mobileSelectionPadding = showCardSelectionHeader
     ? { paddingTop: "calc(3.5rem + env(safe-area-inset-top))" }
@@ -896,14 +1035,18 @@ export const MyStockListProducts = memo(function MyStockListProducts({
   );
 
   const handleBulkConvertUsdToArs = async () => {
-    if (!selectedProducts.length) return;
+    if (!selectedProducts.length && !allRowsSelected) return;
     setIsBulkWorking(true);
     try {
+      const productsToProcess = allRowsSelected ? transformedProducts : selectedProducts;
+      if (!productsToProcess.length) return;
       const result = await convertUsdToArsForProducts({
         listId,
-        products: selectedProducts,
+        products: productsToProcess,
         mappingConfig,
         columnSchema,
+        applyToAll: allRowsSelected,
+        productIds: allRowsSelected ? undefined : productsToProcess.map((p) => p.id),
       });
 
       if (!result.dollarRate) {
@@ -921,7 +1064,8 @@ export const MyStockListProducts = memo(function MyStockListProducts({
       queryClient.invalidateQueries({ queryKey: ["delivery-note-with-items"], exact: false });
       
       // Update cart prices for converted products
-      await updateCartPricesAfterConversion(selectedProducts);
+      await updateCartPricesAfterConversion(productsToProcess);
+      await syncListCacheFromLocal(productsToProcess.map((p) => p.id));
       
       setMenuState(null);
       clearSelection();
@@ -934,13 +1078,17 @@ export const MyStockListProducts = memo(function MyStockListProducts({
   };
 
   const handleBulkRevertArsToUsd = async () => {
-    if (!selectedProducts.length) return;
+    if (!selectedProducts.length && !allRowsSelected) return;
     setIsBulkWorking(true);
     try {
+      const productsToProcess = allRowsSelected ? transformedProducts : selectedProducts;
+      if (!productsToProcess.length) return;
       const result = await revertUsdToArsForProducts({
         listId,
-        products: selectedProducts,
+        products: productsToProcess,
         mappingConfig,
+        applyToAll: allRowsSelected,
+        productIds: allRowsSelected ? undefined : productsToProcess.map((p) => p.id),
       });
 
       toast.success(
@@ -953,7 +1101,8 @@ export const MyStockListProducts = memo(function MyStockListProducts({
       queryClient.invalidateQueries({ queryKey: ["delivery-note-with-items"], exact: false });
       
       // Update cart prices for reverted products
-      await updateCartPricesAfterConversion(selectedProducts);
+      await updateCartPricesAfterConversion(productsToProcess);
+      await syncListCacheFromLocal(productsToProcess.map((p) => p.id));
       
       setMenuState(null);
       clearSelection();
@@ -1005,6 +1154,9 @@ export const MyStockListProducts = memo(function MyStockListProducts({
           : { description: `Dólar oficial: $${result.dollarRate.toFixed(2)}` },
       );
 
+      await updateCartPricesAfterConversion(products);
+      await syncListCacheFromLocal(products.map((p) => p.id));
+
       queryClient.invalidateQueries({ queryKey: ["my-stock"] });
       queryClient.invalidateQueries({ queryKey: ["list-products", listId], exact: false });
       queryClient.invalidateQueries({ queryKey: ["delivery-notes"] });
@@ -1042,6 +1194,9 @@ export const MyStockListProducts = memo(function MyStockListProducts({
         result.reverted === 1 ? "Conversión revertida a USD" : `${result.reverted} productos revertidos a USD`,
       );
 
+      await updateCartPricesAfterConversion(products);
+      await syncListCacheFromLocal(products.map((p) => p.id));
+
       queryClient.invalidateQueries({ queryKey: ["my-stock"] });
       queryClient.invalidateQueries({ queryKey: ["list-products", listId], exact: false });
       queryClient.invalidateQueries({ queryKey: ["delivery-notes"] });
@@ -1057,14 +1212,17 @@ export const MyStockListProducts = memo(function MyStockListProducts({
   };
 
   const handleConfirmDeleteRows = async () => {
-    const ids = Array.from(selectedRowIds);
+    const ids = allRowsSelected
+      ? transformedProducts.map((p) => String((p as any).id ?? (p as any).product_id ?? "")).filter(Boolean)
+      : Array.from(selectedRowIds);
     if (!ids.length) return;
     setIsBulkWorking(true);
     try {
       onRemoveProducts?.(ids);
       if (!onRemoveProducts) ids.forEach((id) => onRemoveProduct?.(id));
 
-      await bulkRemoveFromMyStock({ productIds: selectedProducts.map((p) => p.id) });
+      await bulkRemoveFromMyStock({ productIds: ids });
+      await syncListCacheFromLocal(ids);
       toast.success(ids.length === 1 ? "Producto quitado de Mi Stock" : `${ids.length} productos quitados de Mi Stock`);
       clearSelection();
       queryClient.invalidateQueries({ queryKey: ["my-stock"] });
@@ -1131,23 +1289,28 @@ export const MyStockListProducts = memo(function MyStockListProducts({
   }, [filteredProducts, selectedConvertibleColumnKeys, mappingConfig]);
 
   const selectAllRows = useCallback(() => {
-    const allIds = filteredProducts.map((product) =>
-      String((product as any).id ?? (product as any).product_id ?? ""),
-    );
-    const filteredIds = allIds.filter(Boolean);
-    if (!filteredIds.length) return;
-    const isAllSelected = filteredIds.every((id) => selectedRowIds.has(id));
-    if (isAllSelected) {
-      setSelectedRowIds(new Set());
-      setSelectedColumnKeys(new Set());
-      setMenuState(null);
+    const allIds = transformedProducts
+      .map((product) => String((product as any).id ?? (product as any).product_id ?? ""))
+      .filter(Boolean);
+    if (!allIds.length) return;
+    if (allRowsSelected) {
+      clearSelection();
       rowAnchorIdRef.current = null;
       return;
     }
     setSelectedColumnKeys(new Set());
-    setSelectedRowIds(new Set(filteredIds));
-    rowAnchorIdRef.current = filteredIds[0] ?? null;
-  }, [filteredProducts, selectedRowIds]);
+    setSelectedRowIds(new Set(allIds));
+    setAllRowsSelected(true);
+    rowAnchorIdRef.current = allIds[0] ?? null;
+  }, [transformedProducts, allRowsSelected, clearSelection]);
+
+  useEffect(() => {
+    if (!allRowsSelected) return;
+    const allIds = transformedProducts
+      .map((product) => String((product as any).id ?? (product as any).product_id ?? ""))
+      .filter(Boolean);
+    setSelectedRowIds(new Set(allIds));
+  }, [allRowsSelected, transformedProducts]);
 
   const mobileSelectionHeader = showCardSelectionHeader ? (
     <div
@@ -1318,7 +1481,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
             suppressStockToasts={true}
             enableSelection
             selectedIds={selectedRowIds}
-            selectionModeActive={selectedRowIds.size > 0}
+            selectionModeActive={selectedRowIds.size > 0 || allRowsSelected}
             onRowClick={handleRowClick}
             onRowPointerDown={handleRowPointerDown}
             onRowPointerUp={clearLongPressTimer}
@@ -1337,7 +1500,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                     <Button
                       variant="ghost"
                       size="sm"
-                      disabled={!selectedProducts.length}
+                      disabled={!selectedProducts.length && !allRowsSelected}
                       onClick={() => {
                         setMobileActionsOpen(false);
                         handleBulkAddToCart();
@@ -1350,7 +1513,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                     <Button
                       variant="ghost"
                       size="sm"
-                      disabled={!selectedProducts.length || isBulkWorking}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking}
                       onClick={() => {
                         setMobileActionsOpen(false);
                         void handleBulkConvertUsdToArs();
@@ -1363,7 +1526,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                     <Button
                       variant="ghost"
                       size="sm"
-                      disabled={!selectedProducts.length || isBulkWorking || !anySelectedFxConverted}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking || !anySelectedFxConverted}
                       onClick={() => {
                         setMobileActionsOpen(false);
                         void handleBulkRevertArsToUsd();
@@ -1376,7 +1539,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                     <Button
                       variant="ghost"
                       size="sm"
-                      disabled={!selectedRowIds.size || isBulkWorking}
+                      disabled={(!selectedRowIds.size && !allRowsSelected) || isBulkWorking}
                       onClick={() => {
                         setMobileActionsOpen(false);
                         setConfirmDeleteRowsOpen(true);
@@ -1440,7 +1603,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
             <AlertDialogHeader>
               <AlertDialogTitle>¿Quitar de Mi Stock?</AlertDialogTitle>
               <AlertDialogDescription>
-                Esta acción quitará {selectedRowIds.size} producto{selectedRowIds.size === 1 ? "" : "s"} de Mi Stock. No se puede deshacer.
+                {deleteRowsDescription}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -1505,8 +1668,11 @@ export const MyStockListProducts = memo(function MyStockListProducts({
               <div className="text-sm text-muted-foreground">
                 {selectedMode === "rows" ? (
                   <span>
-                    {selectedRowIds.size} producto{selectedRowIds.size === 1 ? "" : "s"} seleccionado
-                    {selectedRowIds.size === 1 ? "" : "s"}
+                    {allRowsSelected
+                      ? "Todos los productos seleccionados"
+                      : `${selectedRowIds.size} producto${selectedRowIds.size === 1 ? "" : "s"} seleccionado${
+                          selectedRowIds.size === 1 ? "" : "s"
+                        }`}
                   </span>
                 ) : (
                   <span>
@@ -1522,7 +1688,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!selectedProducts.length}
+                      disabled={!selectedProducts.length && !allRowsSelected}
                       onClick={handleBulkAddToCart}
                       className="gap-2"
                     >
@@ -1532,7 +1698,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!selectedProducts.length || isBulkWorking}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking}
                       onClick={() => void handleBulkConvertUsdToArs()}
                       className="gap-2"
                     >
@@ -1542,7 +1708,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!selectedProducts.length || isBulkWorking || !anySelectedFxConverted}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking || !anySelectedFxConverted}
                       onClick={() => void handleBulkRevertArsToUsd()}
                       className="gap-2"
                     >
@@ -1552,7 +1718,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                     <Button
                       variant="destructive"
                       size="sm"
-                      disabled={!selectedRowIds.size || isBulkWorking}
+                      disabled={(!selectedRowIds.size && !allRowsSelected) || isBulkWorking}
                       onClick={() => setConfirmDeleteRowsOpen(true)}
                       className="gap-2"
                     >
@@ -1621,6 +1787,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                         if (isMobile) return;
                         if (!isSelectableColumn(header.column.id)) return;
 
+                        setAllRowsSelected(false);
                         setSelectedRowIds(new Set());
                         setSelectedColumnKeys((prev) => (prev.has(header.column.id) ? prev : new Set([header.column.id])));
                         openMenuAtPoint("columns", e.clientX, e.clientY);
@@ -1637,6 +1804,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                         const x = e.clientX;
                         const y = e.clientY;
                         longPressTimerRef.current = window.setTimeout(() => {
+                          setAllRowsSelected(false);
                           setSelectedRowIds(new Set());
                           setSelectedColumnKeys((prev) => (prev.has(columnKey) ? prev : new Set([columnKey])));
                           if (!isMobile) {
@@ -1709,6 +1877,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                       if (isMobile) return;
                       if (isInteractiveTarget(e.target)) return;
                       const id = String((row.original as any).id);
+                      setAllRowsSelected(false);
                       setSelectedColumnKeys(new Set());
                       setSelectedRowIds((prev) => (prev.has(id) ? prev : new Set([id])));
                       openMenuAtPoint("rows", e.clientX, e.clientY);
@@ -1734,25 +1903,22 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                 data-stock-menu={listId}
                 className="fixed z-50 min-w-[240px] rounded-md border bg-popover p-1 shadow-md"
                 style={{
-                  top:
-                    typeof window !== "undefined"
-                      ? Math.min(menuState.top, window.innerHeight - 220)
-                      : menuState.top,
-                  left:
-                    typeof window !== "undefined"
-                      ? Math.min(menuState.left, window.innerWidth - 260)
-                      : menuState.left,
+                  top: menuPosition?.top ?? menuState.top,
+                  left: menuPosition?.left ?? menuState.left,
                 }}
               >
                 {menuState.type === "rows" ? (
                   <>
                     <div className="px-3 py-2 text-xs text-muted-foreground">
-                      {selectedRowIds.size} fila{selectedRowIds.size === 1 ? "" : "s"} seleccionada
-                      {selectedRowIds.size === 1 ? "" : "s"}
+                      {allRowsSelected
+                        ? "Todos los productos seleccionados"
+                        : `${selectedRowIds.size} fila${selectedRowIds.size === 1 ? "" : "s"} seleccionada${
+                            selectedRowIds.size === 1 ? "" : "s"
+                          }`}
                     </div>
                     <button
                       type="button"
-                      disabled={!selectedProducts.length}
+                      disabled={!selectedProducts.length && !allRowsSelected}
                       className="w-full flex items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
                       onClick={handleBulkAddToCart}
                     >
@@ -1761,7 +1927,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                     </button>
                     <button
                       type="button"
-                      disabled={!selectedProducts.length || isBulkWorking}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking}
                       className="w-full flex items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
                       onClick={() => void handleBulkConvertUsdToArs()}
                     >
@@ -1770,7 +1936,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                     </button>
                     <button
                       type="button"
-                      disabled={!selectedProducts.length || isBulkWorking || !anySelectedFxConverted}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking || !anySelectedFxConverted}
                       className="w-full flex items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
                       onClick={() => void handleBulkRevertArsToUsd()}
                     >
@@ -1780,7 +1946,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                     <div className="my-1 h-px bg-border" />
                     <button
                       type="button"
-                      disabled={!selectedRowIds.size || isBulkWorking}
+                      disabled={(!selectedRowIds.size && !allRowsSelected) || isBulkWorking}
                       className="w-full flex items-center gap-2 rounded-sm px-3 py-2 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50"
                       onClick={() => setConfirmDeleteRowsOpen(true)}
                     >
@@ -1864,7 +2030,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
           <AlertDialogHeader>
             <AlertDialogTitle>¿Quitar de Mi Stock?</AlertDialogTitle>
             <AlertDialogDescription>
-              Esta acción quitará {selectedRowIds.size} producto{selectedRowIds.size === 1 ? "" : "s"} de Mi Stock. No se puede deshacer.
+              {deleteRowsDescription}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

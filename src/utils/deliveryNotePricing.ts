@@ -117,3 +117,9 @@ export const resolveDeliveryNoteUnitPrice = async (
 
   return (await resolveCustomColumnPrice(priceColumnKey)) ?? primaryFallback;
 };
+
+export const applyPercentageAdjustment = (value: number, pct?: number | null) => {
+  const numericPct = Number(pct ?? 0);
+  if (!Number.isFinite(numericPct) || numericPct === 0) return value;
+  return Number((value * (1 + numericPct / 100)).toFixed(2));
+};

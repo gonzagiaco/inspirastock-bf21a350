@@ -88,6 +88,7 @@ export const DynamicProductTable = ({
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedColumnKeys, setSelectedColumnKeys] = useState<Set<string>>(new Set());
+  const [allRowsSelected, setAllRowsSelected] = useState(false);
   const [menuState, setMenuState] = useState<
     | {
         type: "rows" | "columns";
@@ -96,6 +97,7 @@ export const DynamicProductTable = ({
       }
     | null
   >(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const mobileActionsRef = useRef<HTMLDivElement | null>(null);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
@@ -189,7 +191,7 @@ export const DynamicProductTable = ({
     () => selectedProducts.filter((p) => Boolean((p as any)?.calculated_data?.__fx_usd_ars__at)).length,
     [selectedProducts],
   );
-  const anySelectedFxConverted = selectedFxConvertedCount > 0;
+  const anySelectedFxConverted = allRowsSelected ? true : selectedFxConvertedCount > 0;
 
   const isInteractiveTarget = (target: EventTarget | null) => {
     if (!(target instanceof Element)) return false;
@@ -201,8 +203,19 @@ export const DynamicProductTable = ({
     return Boolean(target.closest("input, textarea, [contenteditable='true']"));
   };
 
+  const codeColumnKeys = useMemo(() => {
+    const keys = new Set<string>(["code"]);
+    for (const key of mappingConfig?.code_keys ?? []) {
+      keys.add(key);
+    }
+    return keys;
+  }, [mappingConfig]);
+
   const isSelectableColumn = (columnKey: string) => {
-    return Boolean(columnKey) && columnKey !== "actions" && columnKey !== "quantity";
+    if (!columnKey) return false;
+    if (columnKey === "actions" || columnKey === "quantity" || columnKey === "stock_threshold") return false;
+    if (codeColumnKeys.has(columnKey)) return false;
+    return true;
   };
 
   const isConvertibleColumn = (columnKey: string) => {
@@ -263,7 +276,42 @@ export const DynamicProductTable = ({
     };
   }, [menuState]);
 
+  useEffect(() => {
+    if (!menuState) {
+      setMenuPosition(null);
+      return;
+    }
+
+    const raf = window.requestAnimationFrame(() => {
+      const menuEl = menuRef.current;
+      if (!menuEl) return;
+
+      const rect = menuEl.getBoundingClientRect();
+      const menuHeight = rect.height || 220;
+      const menuWidth = rect.width || 260;
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+      const margin = 8;
+
+      const shouldOpenUp = menuState.top > viewportHeight / 2;
+      let top = shouldOpenUp ? menuState.top - menuHeight : menuState.top;
+      top = Math.max(margin, Math.min(top, viewportHeight - menuHeight - margin));
+
+      let left = menuState.left;
+      if (left + menuWidth > viewportWidth - margin) {
+        left = Math.max(margin, viewportWidth - menuWidth - margin);
+      }
+
+      setMenuPosition({ top, left });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+    };
+  }, [menuState]);
+
   const clearSelection = () => {
+    setAllRowsSelected(false);
     setSelectedRowIds(new Set());
     setSelectedColumnKeys(new Set());
     setMenuState(null);
@@ -313,6 +361,7 @@ export const DynamicProductTable = ({
     (table.getHeaderGroups()[0]?.headers ?? []).map((h) => h.column.id).filter((k) => isSelectableColumn(k));
 
   const selectRowSingle = (productId: string) => {
+    setAllRowsSelected(false);
     setSelectedColumnKeys(new Set());
     setSelectedRowIds(new Set([productId]));
     setMenuState(null);
@@ -320,6 +369,7 @@ export const DynamicProductTable = ({
   };
 
   const toggleRow = (productId: string) => {
+    setAllRowsSelected(false);
     setSelectedColumnKeys(new Set());
     setSelectedRowIds((prev) => {
       const next = new Set(prev);
@@ -332,6 +382,7 @@ export const DynamicProductTable = ({
   };
 
   const selectRowRange = (toProductId: string, additive: boolean) => {
+    setAllRowsSelected(false);
     const order = getVisibleRowIds();
     const anchorId = rowAnchorIdRef.current ?? toProductId;
     const fromIndex = order.indexOf(anchorId);
@@ -360,6 +411,7 @@ export const DynamicProductTable = ({
     const x = e.clientX;
     const y = e.clientY;
     longPressTimerRef.current = window.setTimeout(() => {
+      setAllRowsSelected(false);
       setSelectedColumnKeys(new Set());
       setSelectedRowIds((prev) => (prev.has(productId) ? prev : new Set([productId])));
       if (!isMobile) {
@@ -394,6 +446,7 @@ export const DynamicProductTable = ({
 
   const selectColumnSingle = (columnKey: string) => {
     if (!isSelectableColumn(columnKey)) return;
+    setAllRowsSelected(false);
     setSelectedRowIds(new Set());
     setSelectedColumnKeys(new Set([columnKey]));
     setMenuState(null);
@@ -402,6 +455,7 @@ export const DynamicProductTable = ({
 
   const toggleColumn = (columnKey: string) => {
     if (!isSelectableColumn(columnKey)) return;
+    setAllRowsSelected(false);
     setSelectedRowIds(new Set());
     setSelectedColumnKeys((prev) => {
       const next = new Set(prev);
@@ -415,6 +469,7 @@ export const DynamicProductTable = ({
 
   const selectColumnRange = (toColumnKey: string, additive: boolean) => {
     if (!isSelectableColumn(toColumnKey)) return;
+    setAllRowsSelected(false);
 
     const order = getVisibleSelectableColumnKeys();
     const anchorKey = columnAnchorKeyRef.current ?? toColumnKey;
@@ -440,37 +495,61 @@ export const DynamicProductTable = ({
     for (const c of columnSchema) {
       if (c.isStandard) keys.add(c.key);
     }
+    for (const key of mappingConfig?.code_keys ?? []) {
+      keys.add(key);
+    }
     keys.add("code");
     keys.add("name");
     return keys;
-  }, [columnSchema]);
+  }, [columnSchema, mappingConfig]);
 
   const handleBulkAddToCart = () => {
     if (!onAddToRequest) return;
-    if (!selectedProducts.length) return;
+    if (!selectedProducts.length && !allRowsSelected) return;
+    setIsBulkWorking(true);
+    void (async () => {
+      try {
+        const productsToAdd = allRowsSelected ? await fetchAllProductsForList() : selectedProducts;
+        if (!productsToAdd.length) return;
 
-    for (const p of selectedProducts) {
-      onAddToRequest(p, mappingConfig, { silent: true });
-    }
+        for (const p of productsToAdd) {
+          onAddToRequest(p, mappingConfig, { silent: true });
+        }
 
-    toast.success(
-      selectedProducts.length === 1 ? "Producto agregado al carrito" : `${selectedProducts.length} productos agregados al carrito`,
-    );
-    setMenuState(null);
-    clearSelection();
+        toast.success(
+          productsToAdd.length === 1
+            ? "Producto agregado al carrito"
+            : `${productsToAdd.length} productos agregados al carrito`,
+        );
+        setMenuState(null);
+        clearSelection();
+      } catch (e: any) {
+        console.error("bulk addToCart error:", e);
+        toast.error(e?.message || "Error al agregar productos al carrito");
+      } finally {
+        setIsBulkWorking(false);
+      }
+    })();
   };
 
   const selectedMode: "rows" | "columns" | null =
-    selectedRowIds.size > 0 ? "rows" : selectedColumnKeys.size > 0 ? "columns" : null;
+    allRowsSelected || selectedRowIds.size > 0 ? "rows" : selectedColumnKeys.size > 0 ? "columns" : null;
   const isInSelectionMode = selectedMode != null;
   const selectionLabel =
     selectedMode === "rows"
-      ? `${selectedRowIds.size} producto${selectedRowIds.size === 1 ? "" : "s"} seleccionado${
-          selectedRowIds.size === 1 ? "" : "s"
-        }`
+      ? allRowsSelected
+        ? "Todos los productos de la lista seleccionados"
+        : `${selectedRowIds.size} producto${selectedRowIds.size === 1 ? "" : "s"} seleccionado${
+            selectedRowIds.size === 1 ? "" : "s"
+          }`
       : `${selectedColumnKeys.size} columna${selectedColumnKeys.size === 1 ? "" : "s"} seleccionada${
           selectedColumnKeys.size === 1 ? "" : "s"
         }`;
+  const deleteRowsDescription = allRowsSelected
+    ? "Esta acción eliminará todos los productos de la lista (y se quitarán de Mi Stock y del carrito si estaban presentes). No se puede deshacer."
+    : `Esta acción eliminará ${selectedRowIds.size} producto${
+        selectedRowIds.size === 1 ? "" : "s"
+      } (y se quitarán de Mi Stock y del carrito si estaban presentes). No se puede deshacer.`;
 
   useEffect(() => {
     if (!isInSelectionMode) {
@@ -479,12 +558,16 @@ export const DynamicProductTable = ({
   }, [isInSelectionMode]);
 
   const handleBulkAddToMyStock = async () => {
-    if (!selectedProducts.length) return;
+    if (!selectedProducts.length && !allRowsSelected) return;
     setIsBulkWorking(true);
     try {
-      await bulkAddToMyStock({ productIds: selectedProducts.map((p) => p.id), quantity: 1 });
+      const productIds = allRowsSelected ? await fetchAllProductIdsForList() : selectedProducts.map((p) => p.id);
+      if (!productIds.length) return;
+
+      await bulkAddToMyStock({ productIds, quantity: 1 });
+      await syncListCacheFromLocal(productIds);
       toast.success(
-        selectedProducts.length === 1 ? "Agregado a Mi Stock" : `${selectedProducts.length} productos agregados a Mi Stock`,
+        productIds.length === 1 ? "Agregado a Mi Stock" : `${productIds.length} productos agregados a Mi Stock`,
       );
       queryClient.invalidateQueries({ queryKey: ["my-stock"], exact: false });
       setMenuState(null);
@@ -547,15 +630,154 @@ export const DynamicProductTable = ({
     }
   };
 
+  const fetchAllProductIdsForList = async (): Promise<string[]> => {
+    if (isOnline()) {
+      const ids: string[] = [];
+      const pageSize = 1000;
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("dynamic_products_index")
+          .select("product_id")
+          .eq("list_id", listId)
+          .order("product_id", { ascending: true })
+          .range(from, from + pageSize - 1);
+        if (error) throw error;
+        const batch = (data ?? []).map((row: any) => row.product_id).filter(Boolean);
+        ids.push(...batch);
+        if (!data || data.length < pageSize) break;
+        from += pageSize;
+      }
+      return ids;
+    }
+
+    const rows = await localDB.dynamic_products_index.where({ list_id: listId }).toArray();
+    return rows.map((row: any) => row.product_id).filter(Boolean);
+  };
+
+  const fetchAllProductsForList = async (): Promise<DynamicProduct[]> => {
+    if (isOnline()) {
+      const products: DynamicProduct[] = [];
+      const pageSize = 500;
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("dynamic_products_index")
+          .select("product_id, list_id, code, name, price, quantity, calculated_data, dynamic_products(data)")
+          .eq("list_id", listId)
+          .order("name", { ascending: true, nullsFirst: true })
+          .range(from, from + pageSize - 1);
+        if (error) throw error;
+        const batch = (data ?? []).map(
+          (item: any) =>
+            ({
+              id: item.product_id,
+              listId: item.list_id,
+              code: item.code,
+              name: item.name,
+              price: item.price,
+              quantity: item.quantity,
+              in_my_stock: item.in_my_stock,
+              data: item?.dynamic_products?.data ?? item?.data ?? {},
+              calculated_data: item.calculated_data ?? {},
+            }) as DynamicProduct,
+        );
+        products.push(...batch);
+        if (!data || data.length < pageSize) break;
+        from += pageSize;
+      }
+      return products;
+    }
+
+    const indexRows = await localDB.dynamic_products_index.where({ list_id: listId }).toArray();
+    const productIds = indexRows.map((row: any) => row.product_id).filter(Boolean);
+    const productRows = await localDB.dynamic_products.bulkGet(productIds);
+    const productMap = new Map<string, any>();
+    for (const row of productRows) {
+      if (row?.id) productMap.set(row.id, row);
+    }
+
+    return indexRows.map((item: any) => {
+      const full = productMap.get(item.product_id);
+      return {
+        id: item.product_id,
+        listId: item.list_id,
+        code: item.code,
+        name: item.name,
+        price: item.price,
+        quantity: item.quantity,
+        in_my_stock: item.in_my_stock,
+        data: full?.data ?? {},
+        calculated_data: item.calculated_data ?? {},
+      } as DynamicProduct;
+    });
+  };
+
+  const syncListCacheFromLocal = async (productIds: string[]) => {
+    const ids = productIds.filter(Boolean);
+    if (!ids.length) return;
+
+    const [indexRows, stockRows] = await Promise.all([
+      localDB.dynamic_products_index.where("product_id").anyOf(ids).toArray(),
+      localDB.my_stock_products.where("product_id").anyOf(ids).toArray(),
+    ]);
+
+    const indexMap = new Map(indexRows.map((row: any) => [row.product_id, row]));
+    const stockMap = new Map(stockRows.map((row: any) => [row.product_id, row]));
+
+    queryClient.setQueriesData({ queryKey: ["list-products", listId] }, (old: any) => {
+      if (!old?.pages) return old;
+      return {
+        ...old,
+        pages: old.pages.map((page: any) => ({
+          ...page,
+          data: (page.data ?? []).map((item: any) => {
+            const indexRow = indexMap.get(item.product_id);
+            if (!indexRow) return item;
+            const stockRow = stockMap.get(item.product_id);
+            return {
+              ...item,
+              price: indexRow.price ?? item.price,
+              quantity: indexRow.quantity ?? item.quantity,
+              stock_threshold: stockRow?.stock_threshold ?? indexRow.stock_threshold ?? item.stock_threshold,
+              calculated_data: indexRow.calculated_data ?? item.calculated_data,
+              in_my_stock: Boolean(stockRow),
+            };
+          }),
+        })),
+      };
+    });
+
+    queryClient.setQueriesData({ queryKey: ["my-stock"] }, (old: any) => {
+      if (!Array.isArray(old)) return old;
+      return old.map((item: any) => {
+        const indexRow = indexMap.get(item.product_id);
+        if (!indexRow) return item;
+        const stockRow = stockMap.get(item.product_id);
+        return {
+          ...item,
+          price: indexRow.price ?? item.price,
+          quantity: stockRow?.quantity ?? indexRow.quantity ?? item.quantity,
+          stock_threshold: stockRow?.stock_threshold ?? item.stock_threshold,
+          calculated_data: indexRow.calculated_data ?? item.calculated_data,
+        };
+      });
+    });
+  };
+
   const handleBulkConvertUsdToArs = async () => {
-    if (!selectedProducts.length) return;
+    if (!selectedProducts.length && !allRowsSelected) return;
     setIsBulkWorking(true);
     try {
+      const productsToProcess = allRowsSelected ? await fetchAllProductsForList() : selectedProducts;
+      if (!productsToProcess.length) return;
       const result = await convertUsdToArsForProducts({
         listId,
-        products: selectedProducts,
+        products: productsToProcess,
         mappingConfig,
         columnSchema,
+        applyToAll: allRowsSelected,
+        productIds: allRowsSelected ? undefined : productsToProcess.map((p) => p.id),
       });
 
       if (!result.dollarRate) {
@@ -564,7 +786,8 @@ export const DynamicProductTable = ({
       }
 
       // Update cart prices for converted products
-      await updateCartPricesAfterConversion(selectedProducts.map((p) => p.id));
+      await updateCartPricesAfterConversion(productsToProcess.map((p) => p.id));
+      await syncListCacheFromLocal(productsToProcess.map((p) => p.id));
 
       toast.success(result.updated === 1 ? "Precio convertido a ARS" : `${result.updated} productos convertidos a ARS`, {
         description: `Dólar oficial: $${result.dollarRate.toFixed(2)}`,
@@ -585,17 +808,22 @@ export const DynamicProductTable = ({
   };
 
   const handleBulkRevertArsToUsd = async () => {
-    if (!selectedProducts.length) return;
+    if (!selectedProducts.length && !allRowsSelected) return;
     setIsBulkWorking(true);
     try {
+      const productsToProcess = allRowsSelected ? await fetchAllProductsForList() : selectedProducts;
+      if (!productsToProcess.length) return;
       const result = await revertUsdToArsForProducts({
         listId,
-        products: selectedProducts,
+        products: productsToProcess,
         mappingConfig,
+        applyToAll: allRowsSelected,
+        productIds: allRowsSelected ? undefined : productsToProcess.map((p) => p.id),
       });
 
       // Update cart prices for reverted products
-      await updateCartPricesAfterConversion(selectedProducts.map((p) => p.id));
+      await updateCartPricesAfterConversion(productsToProcess.map((p) => p.id));
+      await syncListCacheFromLocal(productsToProcess.map((p) => p.id));
 
       toast.success(
         result.reverted === 1 ? "Conversión revertida a USD" : `${result.reverted} productos revertidos a USD`,
@@ -648,6 +876,7 @@ export const DynamicProductTable = ({
 
       // Update cart prices for converted products
       await updateCartPricesAfterConversion(Array.from(new Set(requestList.map((item) => item.productId))));
+      await syncListCacheFromLocal(products.map((p) => p.id));
 
       const skipped = result.skippedAlreadyConverted;
       toast.success(
@@ -696,6 +925,7 @@ export const DynamicProductTable = ({
 
       // Update cart prices for reverted products
       await updateCartPricesAfterConversion(Array.from(new Set(requestList.map((item) => item.productId))));
+      await syncListCacheFromLocal(products.map((p) => p.id));
 
       toast.success(
         result.reverted === 1 ? "Conversión revertida a USD" : `${result.reverted} productos revertidos a USD`,
@@ -717,7 +947,7 @@ export const DynamicProductTable = ({
   };
 
   const handleConfirmDeleteRows = async () => {
-    const ids = Array.from(selectedRowIds);
+    const ids = allRowsSelected ? await fetchAllProductIdsForList() : Array.from(selectedRowIds);
     if (!ids.length) return;
     setIsBulkWorking(true);
     try {
@@ -1059,18 +1289,22 @@ export const DynamicProductTable = ({
   const selectAllRows = () => {
     const allIds = table.getRowModel().rows.map((row) => String((row.original as any).id ?? (row.original as any).product_id ?? ""));
     if (!allIds.length) return;
-    const isAllSelected = allIds.every((id) => selectedRowIds.has(id));
-    if (isAllSelected) {
-      setSelectedRowIds(new Set());
-      setSelectedColumnKeys(new Set());
-      setMenuState(null);
+    if (allRowsSelected) {
+      clearSelection();
       rowAnchorIdRef.current = null;
       return;
     }
     setSelectedColumnKeys(new Set());
     setSelectedRowIds(new Set(allIds));
+    setAllRowsSelected(true);
     rowAnchorIdRef.current = allIds[0] ?? null;
   };
+
+  useEffect(() => {
+    if (!allRowsSelected) return;
+    const allIds = table.getRowModel().rows.map((row) => String((row.original as any).id ?? (row.original as any).product_id ?? ""));
+    setSelectedRowIds(new Set(allIds));
+  }, [allRowsSelected, effectiveProducts, table]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1239,7 +1473,7 @@ export const DynamicProductTable = ({
             showLowStockBadge={true}
             enableSelection
             selectedIds={selectedRowIds}
-            selectionModeActive={selectedRowIds.size > 0}
+            selectionModeActive={selectedRowIds.size > 0 || allRowsSelected}
             onRowClick={handleRowClick}
             onRowPointerDown={handleRowPointerDown}
             onRowPointerUp={clearLongPressTimer}
@@ -1256,8 +1490,11 @@ export const DynamicProductTable = ({
               <div className="text-sm text-muted-foreground">
                 {selectedMode === "rows" ? (
                   <span>
-                    {selectedRowIds.size} producto{selectedRowIds.size === 1 ? "" : "s"} seleccionado
-                    {selectedRowIds.size === 1 ? "" : "s"}
+                    {allRowsSelected
+                      ? "Todos los productos seleccionados"
+                      : `${selectedRowIds.size} producto${selectedRowIds.size === 1 ? "" : "s"} seleccionado${
+                          selectedRowIds.size === 1 ? "" : "s"
+                        }`}
                   </span>
                 ) : (
                   <span>
@@ -1273,7 +1510,7 @@ export const DynamicProductTable = ({
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!selectedProducts.length || !onAddToRequest}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || !onAddToRequest}
                       onClick={handleBulkAddToCart}
                       className="gap-2"
                     >
@@ -1283,7 +1520,7 @@ export const DynamicProductTable = ({
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!selectedProducts.length || isBulkWorking}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking}
                       onClick={() => void handleBulkAddToMyStock()}
                       className="gap-2"
                     >
@@ -1293,7 +1530,7 @@ export const DynamicProductTable = ({
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!selectedProducts.length || isBulkWorking}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking}
                       onClick={() => void handleBulkConvertUsdToArs()}
                       className="gap-2"
                     >
@@ -1303,7 +1540,7 @@ export const DynamicProductTable = ({
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!selectedProducts.length || isBulkWorking || !anySelectedFxConverted}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking || !anySelectedFxConverted}
                       onClick={() => void handleBulkRevertArsToUsd()}
                       className="gap-2"
                     >
@@ -1313,7 +1550,7 @@ export const DynamicProductTable = ({
                     <Button
                       variant="destructive"
                       size="sm"
-                      disabled={!selectedRowIds.size || isBulkWorking}
+                      disabled={(!selectedRowIds.size && !allRowsSelected) || isBulkWorking}
                       onClick={() => setConfirmDeleteRowsOpen(true)}
                       className="gap-2"
                     >
@@ -1379,6 +1616,7 @@ export const DynamicProductTable = ({
                         if (isMobile) return;
                         if (!isSelectableColumn(header.column.id)) return;
 
+                        setAllRowsSelected(false);
                         setSelectedRowIds(new Set());
                         setSelectedColumnKeys((prev) => (prev.has(header.column.id) ? prev : new Set([header.column.id])));
                         openMenuAtPoint("columns", e.clientX, e.clientY);
@@ -1395,6 +1633,7 @@ export const DynamicProductTable = ({
                         const x = e.clientX;
                         const y = e.clientY;
                         longPressTimerRef.current = window.setTimeout(() => {
+                          setAllRowsSelected(false);
                           setSelectedRowIds(new Set());
                           setSelectedColumnKeys((prev) => (prev.has(columnKey) ? prev : new Set([columnKey])));
                           if (!isMobile) {
@@ -1518,25 +1757,22 @@ export const DynamicProductTable = ({
                 ref={menuRef}
                 className="fixed z-50 min-w-[240px] rounded-md border bg-popover p-1 shadow-md"
                 style={{
-                  top:
-                    typeof window !== "undefined"
-                      ? Math.min(menuState.top, window.innerHeight - 220)
-                      : menuState.top,
-                  left:
-                    typeof window !== "undefined"
-                      ? Math.min(menuState.left, window.innerWidth - 260)
-                      : menuState.left,
+                  top: menuPosition?.top ?? menuState.top,
+                  left: menuPosition?.left ?? menuState.left,
                 }}
               >
                 {menuState.type === "rows" ? (
                   <>
                     <div className="px-3 py-2 text-xs text-muted-foreground">
-                      {selectedRowIds.size} fila{selectedRowIds.size === 1 ? "" : "s"} seleccionada
-                      {selectedRowIds.size === 1 ? "" : "s"}
+                      {allRowsSelected
+                        ? "Todos los productos seleccionados"
+                        : `${selectedRowIds.size} fila${selectedRowIds.size === 1 ? "" : "s"} seleccionada${
+                            selectedRowIds.size === 1 ? "" : "s"
+                          }`}
                     </div>
                     <button
                       type="button"
-                      disabled={!selectedProducts.length || !onAddToRequest}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || !onAddToRequest}
                       className="w-full flex items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
                       onClick={handleBulkAddToCart}
                     >
@@ -1545,7 +1781,7 @@ export const DynamicProductTable = ({
                     </button>
                     <button
                       type="button"
-                      disabled={!selectedProducts.length || isBulkWorking}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking}
                       className="w-full flex items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
                       onClick={() => void handleBulkAddToMyStock()}
                     >
@@ -1554,7 +1790,7 @@ export const DynamicProductTable = ({
                     </button>
                     <button
                       type="button"
-                      disabled={!selectedProducts.length || isBulkWorking}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking}
                       className="w-full flex items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
                       onClick={() => void handleBulkConvertUsdToArs()}
                     >
@@ -1563,7 +1799,7 @@ export const DynamicProductTable = ({
                     </button>
                     <button
                       type="button"
-                      disabled={!selectedProducts.length || isBulkWorking || !anySelectedFxConverted}
+                      disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking || !anySelectedFxConverted}
                       className="w-full flex items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
                       onClick={() => void handleBulkRevertArsToUsd()}
                     >
@@ -1573,12 +1809,12 @@ export const DynamicProductTable = ({
                     <div className="my-1 h-px bg-border" />
                     <button
                       type="button"
-                      disabled={!selectedRowIds.size || isBulkWorking}
+                      disabled={(!selectedRowIds.size && !allRowsSelected) || isBulkWorking}
                       className="w-full flex items-center gap-2 rounded-sm px-3 py-2 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50"
                       onClick={() => setConfirmDeleteRowsOpen(true)}
                     >
                       <Trash2 className="h-4 w-4" />
-                      Eliminar fila{selectedRowIds.size === 1 ? "" : "s"}
+                      Eliminar {allRowsSelected ? "filas" : `fila${selectedRowIds.size === 1 ? "" : "s"}`}
                     </button>
                     <button
                       type="button"
@@ -1666,7 +1902,7 @@ export const DynamicProductTable = ({
                   <Button
                     variant="ghost"
                     size="sm"
-                    disabled={!selectedProducts.length || !onAddToRequest}
+                    disabled={(!selectedProducts.length && !allRowsSelected) || !onAddToRequest}
                     onClick={() => {
                       setMobileActionsOpen(false);
                       handleBulkAddToCart();
@@ -1679,7 +1915,7 @@ export const DynamicProductTable = ({
                   <Button
                     variant="ghost"
                     size="sm"
-                    disabled={!selectedProducts.length || isBulkWorking}
+                    disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking}
                     onClick={() => {
                       setMobileActionsOpen(false);
                       void handleBulkAddToMyStock();
@@ -1692,7 +1928,7 @@ export const DynamicProductTable = ({
                   <Button
                     variant="ghost"
                     size="sm"
-                    disabled={!selectedProducts.length || isBulkWorking}
+                    disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking}
                     onClick={() => {
                       setMobileActionsOpen(false);
                       void handleBulkConvertUsdToArs();
@@ -1705,7 +1941,7 @@ export const DynamicProductTable = ({
                   <Button
                     variant="ghost"
                     size="sm"
-                    disabled={!selectedProducts.length || isBulkWorking || !anySelectedFxConverted}
+                    disabled={(!selectedProducts.length && !allRowsSelected) || isBulkWorking || !anySelectedFxConverted}
                     onClick={() => {
                       setMobileActionsOpen(false);
                       void handleBulkRevertArsToUsd();
@@ -1718,7 +1954,7 @@ export const DynamicProductTable = ({
                   <Button
                     variant="ghost"
                     size="sm"
-                    disabled={!selectedRowIds.size || isBulkWorking}
+                    disabled={(!selectedRowIds.size && !allRowsSelected) || isBulkWorking}
                     onClick={() => {
                       setMobileActionsOpen(false);
                       setConfirmDeleteRowsOpen(true);
@@ -1782,8 +2018,7 @@ export const DynamicProductTable = ({
           <AlertDialogHeader>
             <AlertDialogTitle>¿Eliminar filas?</AlertDialogTitle>
             <AlertDialogDescription>
-              Esta acción eliminará {selectedRowIds.size} producto{selectedRowIds.size === 1 ? "" : "s"} (y se quitarán de
-              Mi Stock y del carrito si estaban presentes). No se puede deshacer.
+              {deleteRowsDescription}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

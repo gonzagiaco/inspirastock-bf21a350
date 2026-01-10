@@ -12,6 +12,7 @@ import {
   syncDeliveryNoteById,
 } from "@/lib/localDB";
 import { bulkAdjustStock, prepareDeliveryNoteAdjustments, calculateNetStockAdjustments } from "@/services/bulkStockService";
+import { applyPercentageAdjustment } from "@/utils/deliveryNotePricing";
 
 // F) Logging helper para observabilidad
 const logDelivery = (action: string, details?: any) => {
@@ -26,14 +27,18 @@ const calculateItemsTotal = (
     unitPrice?: number;
     subtotal?: number | null;
   }>,
-) =>
-  items.reduce((sum, item) => {
+  globalAdjustmentPct: number = 0,
+) => {
+  const itemsSubtotal = items.reduce((sum, item) => {
     const quantity = Number(item.quantity || 0);
     const unitPrice = Number(item.unit_price ?? item.unitPrice);
     const subtotal = item.subtotal != null ? Number(item.subtotal) : NaN;
     const lineTotal = Number.isFinite(unitPrice) ? quantity * unitPrice : Number.isFinite(subtotal) ? subtotal : 0;
     return sum + (Number.isFinite(lineTotal) ? lineTotal : 0);
   }, 0);
+
+  return applyPercentageAdjustment(itemsSubtotal, globalAdjustmentPct);
+};
 
 /**
  * C) OPTIMIZADO: Actualiza stock usando bulk RPC
@@ -111,6 +116,7 @@ export const useDeliveryNotes = () => {
           paidAmount: Number(note.paid_amount),
           remainingBalance: Number(note.remaining_balance),
           status: note.status as "pending" | "paid",
+          globalAdjustmentPct: Number(note.global_adjustment_pct ?? 0),
           extraFields: note.extra_fields,
           notes: note.notes,
           createdAt: note.created_at,
@@ -125,6 +131,8 @@ export const useDeliveryNotes = () => {
               productName: item.product_name,
               quantity: item.quantity,
               unitPrice: Number(item.unit_price),
+              unitPriceBase: item.unit_price_base != null ? Number(item.unit_price_base) : Number(item.unit_price),
+              adjustmentPct: item.adjustment_pct != null ? Number(item.adjustment_pct) : 0,
               subtotal: Number(item.subtotal),
               createdAt: item.created_at,
               productListId: item.product_list_id,
@@ -157,6 +165,7 @@ export const useDeliveryNotes = () => {
         paidAmount: Number(note.paid_amount),
         remainingBalance: Number(note.remaining_balance),
         status: note.status as "pending" | "paid",
+        globalAdjustmentPct: Number(note.global_adjustment_pct ?? 0),
         extraFields: note.extra_fields,
         notes: note.notes,
         createdAt: note.created_at,
@@ -169,6 +178,8 @@ export const useDeliveryNotes = () => {
           productName: item.product_name,
           quantity: item.quantity,
           unitPrice: Number(item.unit_price),
+          unitPriceBase: item.unit_price_base != null ? Number(item.unit_price_base) : Number(item.unit_price),
+          adjustmentPct: item.adjustment_pct != null ? Number(item.adjustment_pct) : 0,
           subtotal: Number(item.subtotal),
           createdAt: item.created_at,
           productListId: item.product_list_id,
@@ -183,7 +194,21 @@ export const useDeliveryNotes = () => {
       const { data: user } = await supabase.auth.getUser();
       if (!user.user) throw new Error("No autenticado");
 
-      const total = input.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+      const globalAdjustmentPct = input.globalAdjustmentPct ?? 0;
+      const normalizedItems = input.items.map((item) => {
+        const baseUnitPrice = item.unitPriceBase ?? item.unitPrice;
+        const adjustmentPct = item.adjustmentPct ?? 0;
+        const adjustedUnitPrice = applyPercentageAdjustment(baseUnitPrice, adjustmentPct);
+        return {
+          ...item,
+          unitPriceBase: baseUnitPrice,
+          adjustmentPct,
+          adjustedUnitPrice,
+          subtotal: item.quantity * adjustedUnitPrice,
+        };
+      });
+      const itemsSubtotal = normalizedItems.reduce((sum, item) => sum + item.subtotal, 0);
+      const total = applyPercentageAdjustment(itemsSubtotal, globalAdjustmentPct);
 
       const status = (input.paidAmount || 0) >= total ? "paid" : "pending";
 
@@ -201,15 +226,18 @@ export const useDeliveryNotes = () => {
           extra_fields: input.extraFields,
           notes: input.notes,
           status,
+          global_adjustment_pct: globalAdjustmentPct,
         };
 
-        const items = input.items.map((item) => ({
+        const items = normalizedItems.map((item) => ({
           product_id: item.productId,
           product_code: item.productCode,
           product_name: item.productName,
           quantity: item.quantity,
-          unit_price: item.unitPrice,
-          subtotal: item.quantity * item.unitPrice,
+          unit_price: item.adjustedUnitPrice,
+          unit_price_base: item.unitPriceBase,
+          adjustment_pct: item.adjustmentPct,
+          subtotal: item.subtotal,
           product_list_id: item.productListId ?? null,
           price_column_key_used: item.priceColumnKeyUsed ?? null,
         }));
@@ -235,6 +263,7 @@ export const useDeliveryNotes = () => {
           extra_fields: input.extraFields,
           notes: input.notes,
           status,
+          global_adjustment_pct: globalAdjustmentPct,
         })
         .select()
         .single();
@@ -242,13 +271,16 @@ export const useDeliveryNotes = () => {
       if (noteError) throw noteError;
 
       const { error: itemsError } = await supabase.from("delivery_note_items").insert(
-        input.items.map((item) => ({
+        normalizedItems.map((item) => ({
           delivery_note_id: note.id,
           product_id: item.productId,
           product_code: item.productCode,
           product_name: item.productName,
           quantity: item.quantity,
-          unit_price: item.unitPrice,
+          unit_price: item.adjustedUnitPrice,
+          unit_price_base: item.unitPriceBase,
+          adjustment_pct: item.adjustmentPct,
+          subtotal: item.subtotal,
           product_list_id: item.productListId ?? null,
           price_column_key_used: item.priceColumnKeyUsed ?? null,
         })),
@@ -291,16 +323,23 @@ export const useDeliveryNotes = () => {
     mutationFn: async ({ id, ...updates }: UpdateDeliveryNoteInput) => {
       if (!isOnline) {
         // Asegurar que se pasen los items para la reversión offline
-        const mappedItems = updates.items?.map((item) => ({
-          product_id: item.productId,
-          product_code: item.productCode,
-          product_name: item.productName,
-          quantity: item.quantity,
-          unit_price: item.unitPrice,
-          subtotal: item.quantity * item.unitPrice,
-          product_list_id: item.productListId ?? null,
-          price_column_key_used: item.priceColumnKeyUsed ?? null,
-        }));
+        const mappedItems = updates.items?.map((item) => {
+          const baseUnitPrice = item.unitPriceBase ?? item.unitPrice;
+          const adjustmentPct = item.adjustmentPct ?? 0;
+          const adjustedUnitPrice = applyPercentageAdjustment(baseUnitPrice, adjustmentPct);
+          return {
+            product_id: item.productId,
+            product_code: item.productCode,
+            product_name: item.productName,
+            quantity: item.quantity,
+            unit_price: adjustedUnitPrice,
+            unit_price_base: baseUnitPrice,
+            adjustment_pct: adjustmentPct,
+            subtotal: item.quantity * adjustedUnitPrice,
+            product_list_id: item.productListId ?? null,
+            price_column_key_used: item.priceColumnKeyUsed ?? null,
+          };
+        });
 
         const offlineUpdates: any = {};
 
@@ -312,6 +351,7 @@ export const useDeliveryNotes = () => {
         if (updates.paidAmount !== undefined) offlineUpdates.paid_amount = updates.paidAmount;
         if (updates.notes !== undefined) offlineUpdates.notes = updates.notes;
         if (updates.extraFields !== undefined) offlineUpdates.extra_fields = updates.extraFields;
+        if (updates.globalAdjustmentPct !== undefined) offlineUpdates.global_adjustment_pct = updates.globalAdjustmentPct;
 
         await updateDeliveryNoteOffline(id, offlineUpdates, mappedItems);
         return;
@@ -355,9 +395,31 @@ export const useDeliveryNotes = () => {
       }
 
       // PASO 3: Calcular nuevo total
+      const nextGlobalAdjustmentPct =
+        updates.globalAdjustmentPct ?? originalNote.global_adjustment_pct ?? 0;
+
+      let normalizedItems: Array<any> | null = null;
       let newTotal = originalNote.total_amount;
+
       if (updates.items) {
-        newTotal = updates.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+        normalizedItems = updates.items.map((item) => {
+          const baseUnitPrice = item.unitPriceBase ?? item.unitPrice;
+          const adjustmentPct = item.adjustmentPct ?? 0;
+          const adjustedUnitPrice = applyPercentageAdjustment(baseUnitPrice, adjustmentPct);
+          return {
+            ...item,
+            unitPriceBase: baseUnitPrice,
+            adjustmentPct,
+            adjustedUnitPrice,
+            subtotal: item.quantity * adjustedUnitPrice,
+          };
+        });
+
+        const itemsSubtotal = normalizedItems.reduce((sum, item) => sum + item.subtotal, 0);
+        newTotal = applyPercentageAdjustment(itemsSubtotal, nextGlobalAdjustmentPct);
+      } else if (updates.globalAdjustmentPct !== undefined && Array.isArray(originalNote.items)) {
+        const itemsSubtotal = calculateItemsTotal(originalNote.items, 0);
+        newTotal = applyPercentageAdjustment(itemsSubtotal, nextGlobalAdjustmentPct);
       }
 
       const newPaidAmount = updates.paidAmount ?? originalNote.paid_amount;
@@ -382,6 +444,9 @@ export const useDeliveryNotes = () => {
       if (updates.clientId !== undefined) {
         noteUpdate.client_id = updates.clientId;
       }
+      if (updates.globalAdjustmentPct !== undefined) {
+        noteUpdate.global_adjustment_pct = nextGlobalAdjustmentPct;
+      }
 
       const { error: noteError } = await supabase.from("delivery_notes").update(noteUpdate).eq("id", id);
 
@@ -396,13 +461,16 @@ export const useDeliveryNotes = () => {
 
         // Insertar nuevos items
         const { error: itemsError } = await supabase.from("delivery_note_items").insert(
-          updates.items.map((item) => ({
+          (normalizedItems ?? []).map((item) => ({
             delivery_note_id: id,
             product_id: item.productId,
             product_code: item.productCode,
             product_name: item.productName,
             quantity: item.quantity,
-            unit_price: item.unitPrice,
+            unit_price: item.adjustedUnitPrice,
+            unit_price_base: item.unitPriceBase,
+            adjustment_pct: item.adjustmentPct,
+            subtotal: item.subtotal,
             product_list_id: item.productListId ?? null,
             price_column_key_used: item.priceColumnKeyUsed ?? null,
           })),
@@ -514,7 +582,9 @@ export const useDeliveryNotes = () => {
         if (!note) throw new Error("Remito no encontrado");
 
         const noteItems = (offlineItems || []).filter((item: any) => item.delivery_note_id === id);
-        const computedTotal = noteItems.length > 0 ? calculateItemsTotal(noteItems) : Number(note.total_amount || 0);
+        const globalAdjustmentPct = Number(note.global_adjustment_pct ?? 0);
+        const computedTotal =
+          noteItems.length > 0 ? calculateItemsTotal(noteItems, globalAdjustmentPct) : Number(note.total_amount || 0);
 
         await markDeliveryNoteAsPaidOffline(id, computedTotal);
         return;
@@ -522,7 +592,7 @@ export const useDeliveryNotes = () => {
 
       const { data: note, error: fetchError } = await supabase
         .from("delivery_notes")
-        .select("total_amount, items:delivery_note_items(quantity, unit_price, subtotal)")
+        .select("total_amount, global_adjustment_pct, items:delivery_note_items(quantity, unit_price, subtotal)")
         .eq("id", id)
         .single();
 
@@ -530,7 +600,9 @@ export const useDeliveryNotes = () => {
       if (!note) throw new Error("Remito no encontrado");
 
       const computedTotal =
-        Array.isArray(note.items) && note.items.length > 0 ? calculateItemsTotal(note.items) : Number(note.total_amount || 0);
+        Array.isArray(note.items) && note.items.length > 0
+          ? calculateItemsTotal(note.items, Number(note.global_adjustment_pct ?? 0))
+          : Number(note.total_amount || 0);
 
       const { error } = await supabase
         .from("delivery_notes")

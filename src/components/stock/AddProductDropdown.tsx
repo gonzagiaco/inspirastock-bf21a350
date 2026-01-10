@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ShoppingCart, Package, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { addToMyStock, removeFromMyStock } from "@/lib/localDB";
+import { addToMyStock, localDB, removeFromMyStock } from "@/lib/localDB";
 import { useQueryClient } from "@tanstack/react-query";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useLocation } from "react-router-dom";
@@ -29,10 +29,41 @@ export function AddProductDropdown({
   const [hasBeenAddedToStock, setHasBeenAddedToStock] = useState(false);
 
   const productId = product.product_id || product.id;
+  const syncListProductsCache = async (targetProductId: string) => {
+    const [indexRow, stockRow] = await Promise.all([
+      localDB.dynamic_products_index.where({ product_id: targetProductId }).first(),
+      localDB.my_stock_products.where({ product_id: targetProductId }).first(),
+    ]);
+
+    const nextQuantity = stockRow?.quantity ?? indexRow?.quantity ?? 0;
+    const nextThreshold = stockRow?.stock_threshold ?? indexRow?.stock_threshold ?? 0;
+    const inMyStock = Boolean(stockRow);
+
+    queryClient.setQueriesData({ queryKey: ["list-products"] }, (old: any) => {
+      if (!old?.pages) return old;
+      return {
+        ...old,
+        pages: old.pages.map((page: any) => ({
+          ...page,
+          data: (page.data ?? []).map((item: any) =>
+            item.product_id === targetProductId
+              ? {
+                  ...item,
+                  quantity: nextQuantity,
+                  stock_threshold: nextThreshold,
+                  in_my_stock: inMyStock,
+                }
+              : item,
+          ),
+        })),
+      };
+    });
+  };
   const handleAddToStock = async () => {
     setHasBeenAddedToStock(true);
     try {
       await addToMyStock(productId, 1);
+      await syncListProductsCache(productId);
       toast.success("Agregado a Mi Stock");
       queryClient.invalidateQueries({ queryKey: ["my-stock"], exact: false });
     } catch (error) {
@@ -47,6 +78,7 @@ export function AddProductDropdown({
 
     try {
       await removeFromMyStock(productId);
+      await syncListProductsCache(productId);
       queryClient.invalidateQueries({ queryKey: ["my-stock"], exact: false });
     } catch (error: any) {
       console.error("Error removing from stock:", error);

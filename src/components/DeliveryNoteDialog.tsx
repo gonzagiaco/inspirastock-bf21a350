@@ -14,6 +14,7 @@ import { useDeliveryClients } from "@/hooks/useDeliveryClients";
 import DeliveryNoteProductSearch from "./DeliveryNoteProductSearch";
 import { X, Plus, Minus, Loader2 } from "lucide-react";
 import { formatARS } from "@/utils/numberParser";
+import { applyPercentageAdjustment } from "@/utils/deliveryNotePricing";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { localDB } from "@/lib/localDB";
@@ -50,6 +51,7 @@ interface CartItem {
   productName: string;
   quantity: number;
   unitPrice: number;
+  adjustmentPct?: number;
   productListId?: string | null;
   priceColumnKeyUsed?: string | null;
 }
@@ -73,6 +75,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
   const [clientMode, setClientMode] = useState<"new" | "existing">("new");
   const [clientSearch, setClientSearch] = useState("");
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [globalAdjustmentPct, setGlobalAdjustmentPct] = useState(0);
 
   // Helper para obtener la columna de precio efectiva de una lista
   const getEffectivePriceColumn = (listId: string | undefined | null): string => {
@@ -224,11 +227,13 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
           productCode: item.productCode,
           productName: item.productName,
           quantity: item.quantity,
-          unitPrice: item.unitPrice,
+          unitPrice: item.unitPriceBase ?? item.unitPrice,
+          adjustmentPct: item.adjustmentPct ?? 0,
           productListId: item.productListId,
           priceColumnKeyUsed: item.priceColumnKeyUsed,
         })) || [],
       );
+      setGlobalAdjustmentPct(note.globalAdjustmentPct ?? 0);
     } else {
       reset({
         customerName: "",
@@ -241,6 +246,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
       setPhoneNumber("");
       setItems([]);
       setClientSearch("");
+      setGlobalAdjustmentPct(0);
 
       if (initialClientId) {
         setClientMode("existing");
@@ -291,6 +297,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
           productName: product.name,
           quantity: 1,
           unitPrice: product.price,
+          adjustmentPct: 0,
           productListId: product.listId,
           priceColumnKeyUsed: product.priceColumnKeyUsed,
         },
@@ -344,7 +351,12 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
     );
   };
 
-  const calculateTotal = () => items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+  const getAdjustedUnitPrice = (item: CartItem) => applyPercentageAdjustment(item.unitPrice, item.adjustmentPct);
+
+  const calculateItemsSubtotal = () =>
+    items.reduce((sum, item) => sum + item.quantity * getAdjustedUnitPrice(item), 0);
+
+  const calculateTotal = () => applyPercentageAdjustment(calculateItemsSubtotal(), globalAdjustmentPct);
 
   const onSubmit = async (data: any) => {
     if (items.length === 0) {
@@ -381,12 +393,15 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
       issueDate: data.issueDate || new Date().toISOString(),
       paidAmount: data.paidAmount || 0,
       notes: data.notes,
+      globalAdjustmentPct,
       items: items.map((item) => ({
         productId: item.productId,
         productCode: item.productCode,
         productName: item.productName,
         quantity: item.quantity,
         unitPrice: item.unitPrice,
+        unitPriceBase: item.unitPrice,
+        adjustmentPct: item.adjustmentPct ?? 0,
         productListId: item.productListId,
         priceColumnKeyUsed: item.priceColumnKeyUsed,
       })),
@@ -643,71 +658,101 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
     <div className="space-y-2">
       <Label>Productos Seleccionados</Label>
       <div className="border rounded-lg divide-y">
-        {items.map((item) => (
-          <div key={item.lineId} className="p-3 flex justify-between items-center">
-            <div className="flex-1">
-              <p className="font-medium">{item.productName}</p>
-              <p className="text-sm text-muted-foreground">
-                Código: {item.productCode} | {formatARS(item.unitPrice)} c/u
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex flex-col md:flex-row items-center gap-2 md:gap-6">
-                <div className="flex items-center">
-                  <span
-                    className="inline-flex"
-                    onClick={() => {
-                      if (isOldPriceItem(item)) showOldPriceToast();
-                    }}
-                  >
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={isOldPriceItem(item)}
-                      className={isOldPriceItem(item) ? "pointer-events-none" : undefined}
-                      onClick={() => handleDecrementQuantity(item.lineId)}
+        {items.map((item) => {
+          const adjustedUnitPrice = getAdjustedUnitPrice(item);
+          const lineSubtotal = adjustedUnitPrice * item.quantity;
+          return (
+            <div key={item.lineId} className="p-3 flex justify-between items-center">
+              <div className="flex-1">
+                <p className="font-medium">{item.productName}</p>
+                <p className="text-sm text-muted-foreground">
+                  C?digo: {item.productCode} | {formatARS(adjustedUnitPrice)} c/u
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex flex-col md:flex-row items-center gap-2 md:gap-6">
+                  <div className="flex items-center">
+                    <span
+                      className="inline-flex"
+                      onClick={() => {
+                        if (isOldPriceItem(item)) showOldPriceToast();
+                      }}
                     >
-                      <Minus className="h-4 w-4" />
-                    </Button>
-                  </span>
-                  <span className="w-12 text-center">{item.quantity}</span>
-                  <span
-                    className="inline-flex"
-                    onClick={() => {
-                      if (isOldPriceItem(item)) showOldPriceToast();
-                    }}
-                  >
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={isOldPriceItem(item)}
-                      className={isOldPriceItem(item) ? "pointer-events-none" : undefined}
-                      onClick={() => handleIncrementAtCurrentPrice(item.lineId)}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={isOldPriceItem(item)}
+                        className={isOldPriceItem(item) ? "pointer-events-none" : undefined}
+                        onClick={() => handleDecrementQuantity(item.lineId)}
+                      >
+                        <Minus className="h-4 w-4" />
+                      </Button>
+                    </span>
+                    <span className="w-12 text-center">{item.quantity}</span>
+                    <span
+                      className="inline-flex"
+                      onClick={() => {
+                        if (isOldPriceItem(item)) showOldPriceToast();
+                      }}
                     >
-                      <Plus className="h-4 w-4" />
-                    </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={isOldPriceItem(item)}
+                        className={isOldPriceItem(item) ? "pointer-events-none" : undefined}
+                        onClick={() => handleIncrementAtCurrentPrice(item.lineId)}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs text-muted-foreground">Ajuste %</Label>
+                    <Input
+                      type="number"
+                      value={item.adjustmentPct ?? 0}
+                      onChange={(e) => {
+                        const next = Number(e.target.value || 0);
+                        setItems((prev) =>
+                          prev.map((i) => (i.lineId === item.lineId ? { ...i, adjustmentPct: next } : i)),
+                        );
+                      }}
+                      className="w-16 h-8 text-xs"
+                    />
+                  </div>
+                  <span className="w-28 text-right font-medium whitespace-nowrap">
+                    {formatARS(lineSubtotal)}
                   </span>
                 </div>
-                <span className="w-28 text-right font-medium whitespace-nowrap">
-                  {formatARS(item.quantity * item.unitPrice)}
-                </span>
+                <Button type="button" size="sm" variant="ghost" onClick={() => handleRemoveItem(item.lineId)}>
+                  <X className="h-4 w-4" />
+                </Button>
               </div>
-              <Button type="button" size="sm" variant="ghost" onClick={() => handleRemoveItem(item.lineId)}>
-                <X className="h-4 w-4" />
-              </Button>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
-      <div className="flex justify-end items-center gap-4 pt-2 border-t">
-        <span className="text-lg font-semibold">Total:</span>
-        <span className="text-2xl font-bold text-primary">{formatARS(calculateTotal())}</span>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2 border-t">
+        <div className="flex items-center gap-2">
+          <Label className="text-sm">Ajuste global (%)</Label>
+          <Input
+            type="number"
+            value={globalAdjustmentPct}
+            onChange={(e) => setGlobalAdjustmentPct(Number(e.target.value || 0))}
+            className="w-20 h-8 text-sm"
+          />
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="text-lg font-semibold">Total:</span>
+          <span className="text-2xl font-bold text-primary">{formatARS(calculateTotal())}</span>
+        </div>
       </div>
     </div>
   )
 }
+
 
 <div className="flex justify-end gap-2">
   <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>

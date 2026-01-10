@@ -72,6 +72,7 @@ interface SortableItemProps {
   column: ColumnSchema;
   isVisible: boolean;
   isDisabled: boolean;
+  isLocked: boolean;
   isSearchable: boolean;
   onToggle: (key: string, visible: boolean) => void;
   onRename: (key: string, newLabel: string) => void;
@@ -83,6 +84,7 @@ function SortableItem({
   column,
   isVisible,
   isDisabled,
+  isLocked,
   isSearchable,
   onToggle,
   onRename,
@@ -109,6 +111,11 @@ function SortableItem({
   };
 
   const handleSaveLabel = () => {
+    if (isLocked) {
+      setIsEditing(false);
+      setEditLabel(column.label);
+      return;
+    }
     if (editLabel.trim() && editLabel !== column.label) {
       onRename(column.key, editLabel.trim());
     }
@@ -187,8 +194,11 @@ function SortableItem({
             size="icon"
             variant="ghost"
             className="h-7 w-7"
-            onClick={() => setIsEditing(true)}
+            onClick={() => {
+              if (!isLocked) setIsEditing(true);
+            }}
             title="Renombrar columna"
+            disabled={isLocked}
           >
             <Edit2 className="h-3 w-3" />
           </Button>
@@ -231,6 +241,14 @@ export const ColumnSettingsDrawer = ({
   const { updateColumnSchema, renameColumnKey } = useProductLists();
   const isOnline = useOnlineStatus();
   const queryClient = useQueryClient();
+
+  const lockedKeys = useMemo(() => {
+    const keys = new Set<string>(["code"]);
+    for (const key of mappingConfig?.code_keys ?? []) {
+      keys.add(key);
+    }
+    return keys;
+  }, [mappingConfig]);
 
   const [open, setOpen] = useState(false);
   const [newViewName, setNewViewName] = useState("");
@@ -632,6 +650,7 @@ export const ColumnSettingsDrawer = ({
                             column={column}
                             isVisible={isVisible}
                             isDisabled={column.isStandard || false}
+                            isLocked={lockedKeys.has(column.key)}
                             isSearchable={isSearchable}
                             onToggle={handleToggleColumn}
                             onRename={handleRename}

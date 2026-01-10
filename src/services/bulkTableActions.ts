@@ -1,6 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { addToMyStock, getOfficialDollarRate, isOnline, localDB, queueOperation, removeFromMyStock } from "@/lib/localDB";
 import { normalizeRawPrice } from "@/utils/numberParser";
+import { applyPercentageAdjustment } from "@/utils/deliveryNotePricing";
 import type { ColumnSchema } from "@/types/productList";
 
 function uniqStrings(values: Array<string | null | undefined>): string[] {
@@ -387,11 +388,18 @@ export async function convertUsdToArsForProducts(args: {
     if (remitoUnitPriceFallback != null) {
       const noteItems = await localDB.delivery_note_items.where("product_id").equals(productId).toArray();
       if (noteItems.length) {
-        const updatedItems = noteItems.map((item: any) => ({
-          ...item,
-          unit_price: remitoUnitPriceFallback,
-          subtotal: Number(item.quantity) * Number(remitoUnitPriceFallback),
-        }));
+        const updatedItems = noteItems.map((item: any) => {
+          const adjustmentPct = item.adjustment_pct ?? 0;
+          const baseUnitPrice = remitoUnitPriceFallback;
+          const adjustedUnitPrice = applyPercentageAdjustment(baseUnitPrice, adjustmentPct);
+          return {
+            ...item,
+            unit_price_base: baseUnitPrice,
+            adjustment_pct: adjustmentPct,
+            unit_price: adjustedUnitPrice,
+            subtotal: Number(item.quantity) * Number(adjustedUnitPrice),
+          };
+        });
 
         await localDB.delivery_note_items.bulkPut(updatedItems);
 
@@ -400,7 +408,12 @@ export async function convertUsdToArsForProducts(args: {
             updatedItems.map(async (item: any) => {
               const { error } = await supabase
                 .from("delivery_note_items")
-                .update({ unit_price: item.unit_price })
+                .update({
+                  unit_price: item.unit_price,
+                  unit_price_base: item.unit_price_base,
+                  adjustment_pct: item.adjustment_pct,
+                  subtotal: item.subtotal,
+                })
                 .eq("id", item.id);
               if (error) throw error;
             }),
@@ -410,6 +423,9 @@ export async function convertUsdToArsForProducts(args: {
             updatedItems.map((item: any) =>
               queueOperation("delivery_note_items", "UPDATE", item.id, {
                 unit_price: item.unit_price,
+                unit_price_base: item.unit_price_base,
+                adjustment_pct: item.adjustment_pct,
+                subtotal: item.subtotal,
               }),
             ),
           );
@@ -544,11 +560,18 @@ export async function revertUsdToArsForProducts(args: {
     if (restoredRemitoUnitPrice != null) {
       const noteItems = await localDB.delivery_note_items.where("product_id").equals(productId).toArray();
       if (noteItems.length) {
-        const updatedItems = noteItems.map((item: any) => ({
-          ...item,
-          unit_price: restoredRemitoUnitPrice,
-          subtotal: Number(item.quantity) * Number(restoredRemitoUnitPrice),
-        }));
+        const updatedItems = noteItems.map((item: any) => {
+          const adjustmentPct = item.adjustment_pct ?? 0;
+          const baseUnitPrice = restoredRemitoUnitPrice;
+          const adjustedUnitPrice = applyPercentageAdjustment(baseUnitPrice, adjustmentPct);
+          return {
+            ...item,
+            unit_price_base: baseUnitPrice,
+            adjustment_pct: adjustmentPct,
+            unit_price: adjustedUnitPrice,
+            subtotal: Number(item.quantity) * Number(adjustedUnitPrice),
+          };
+        });
         await localDB.delivery_note_items.bulkPut(updatedItems);
 
         if (isOnline()) {
@@ -556,7 +579,12 @@ export async function revertUsdToArsForProducts(args: {
             updatedItems.map(async (item: any) => {
               const { error } = await supabase
                 .from("delivery_note_items")
-                .update({ unit_price: item.unit_price })
+                .update({
+                  unit_price: item.unit_price,
+                  unit_price_base: item.unit_price_base,
+                  adjustment_pct: item.adjustment_pct,
+                  subtotal: item.subtotal,
+                })
                 .eq("id", item.id);
               if (error) throw error;
             }),
@@ -564,7 +592,12 @@ export async function revertUsdToArsForProducts(args: {
         } else {
           await Promise.all(
             updatedItems.map((item: any) =>
-              queueOperation("delivery_note_items", "UPDATE", item.id, { unit_price: item.unit_price }),
+              queueOperation("delivery_note_items", "UPDATE", item.id, {
+                unit_price: item.unit_price,
+                unit_price_base: item.unit_price_base,
+                adjustment_pct: item.adjustment_pct,
+                subtotal: item.subtotal,
+              }),
             ),
           );
         }

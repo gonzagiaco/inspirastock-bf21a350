@@ -2,6 +2,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { fetchAllFromTable } from "@/utils/fetchAllProducts";
+import { applyPercentageAdjustment } from "@/utils/deliveryNotePricing";
 
 // ==================== INTERFACES ====================
 
@@ -104,6 +105,7 @@ interface DeliveryNoteDB {
   paid_amount: number;
   remaining_balance: number;
   status: string;
+  global_adjustment_pct?: number;
   extra_fields?: any;
   notes?: string;
   created_at: string;
@@ -118,6 +120,8 @@ interface DeliveryNoteItemDB {
   product_name: string;
   quantity: number;
   unit_price: number;
+  unit_price_base?: number;
+  adjustment_pct?: number;
   subtotal: number;
   created_at: string;
   product_list_id?: string | null;
@@ -1135,6 +1139,9 @@ async function executeDeliveryNoteUpdateWithItems(noteId: string, data: any): Pr
       product_name: item.product_name,
       quantity: item.quantity,
       unit_price: item.unit_price,
+      unit_price_base: item.unit_price_base ?? item.unit_price,
+      adjustment_pct: item.adjustment_pct ?? 0,
+      subtotal: item.subtotal,
       product_list_id: item.product_list_id ?? null,
       price_column_key_used: item.price_column_key_used ?? null,
     }));
@@ -1962,6 +1969,11 @@ export async function updateDeliveryNoteOffline(
   console.log(`  Items antiguos: ${oldItems.length}`);
   console.log(`  Items nuevos: ${items?.length ?? "sin cambios"}`);
 
+  const resolvedGlobalAdjustmentPct =
+    typeof updates.global_adjustment_pct === "number"
+      ? updates.global_adjustment_pct
+      : existing.global_adjustment_pct ?? 0;
+
   // Calcular nuevo total si se proporcionan items
   let newTotal = existing.total_amount;
   const stockAdjustmentsMap = new Map<string, number>();
@@ -1969,7 +1981,8 @@ export async function updateDeliveryNoteOffline(
   // Si se proporcionan items, calcular ajustes netos de stock
   if (items !== undefined) {
     // Recalcular total basado en nuevos items
-    newTotal = items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0);
+    const itemsSubtotal = items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0);
+    newTotal = applyPercentageAdjustment(itemsSubtotal, resolvedGlobalAdjustmentPct);
 
     console.log(`  Total anterior: ${existing.total_amount}, Nuevo total: ${newTotal}`);
 
@@ -2020,6 +2033,9 @@ export async function updateDeliveryNoteOffline(
 
     // Guardar nuevos items en snapshot para sincronizaciÃ³n
     snapshot.newItems = newItemsToSave;
+  } else if (updates.global_adjustment_pct !== undefined) {
+    const itemsSubtotal = oldItems.reduce((sum, item) => sum + item.quantity * item.unit_price, 0);
+    newTotal = applyPercentageAdjustment(itemsSubtotal, resolvedGlobalAdjustmentPct);
   }
 
   // PASO 7: Calcular campos financieros consistentes
@@ -2056,6 +2072,7 @@ export async function updateDeliveryNoteOffline(
     status: newStatus,
     notes: updates.notes ?? existing.notes,
     extra_fields: updates.extra_fields ?? existing.extra_fields,
+    global_adjustment_pct: updates.global_adjustment_pct ?? existing.global_adjustment_pct ?? 0,
     updated_at: now,
     // Snapshot para sincronizaciÃ³n atÃ³mica y rollback
     _snapshot: {
@@ -2068,6 +2085,8 @@ export async function updateDeliveryNoteOffline(
             product_name: item.product_name,
             quantity: item.quantity,
             unit_price: item.unit_price,
+            unit_price_base: item.unit_price_base,
+            adjustment_pct: item.adjustment_pct,
             subtotal: item.subtotal,
           }))
         : null,

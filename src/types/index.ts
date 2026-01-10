@@ -91,6 +91,7 @@ export interface DeliveryNote {
   paidAmount: number;
   remainingBalance: number;
   status: 'pending' | 'paid';
+  globalAdjustmentPct?: number;
   extraFields?: Record<string, any>;
   notes?: string;
   createdAt: string;
@@ -106,6 +107,8 @@ export interface DeliveryNoteItem {
   productName: string;
   quantity: number;
   unitPrice: number;
+  unitPriceBase?: number;
+  adjustmentPct?: number;
   subtotal: number;
   createdAt: string;
   productListId?: string | null;
@@ -121,12 +124,15 @@ export interface CreateDeliveryNoteInput {
   paidAmount?: number;
   extraFields?: Record<string, any>;
   notes?: string;
+  globalAdjustmentPct?: number;
   items: {
     productId?: string;
     productCode: string;
     productName: string;
     quantity: number;
     unitPrice: number;
+    unitPriceBase?: number;
+    adjustmentPct?: number;
     productListId?: string | null;
     priceColumnKeyUsed?: string | null;
   }[];
