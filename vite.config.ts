@@ -57,23 +57,12 @@ export default defineConfig(({ mode }) => ({
         ],
       },
       workbox: {
+        navigationPreload: true,
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024, // 4 MB
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff,woff2}"],
         navigateFallback: "/index.html",
         navigateFallbackDenylist: [/^\/api/, /^\/auth/],
         runtimeCaching: [
-          {
-            urlPattern: ({ request }) => request.mode === "navigate",
-            handler: "NetworkFirst",
-            options: {
-              cacheName: "pages-cache",
-              networkTimeoutSeconds: 3,
-              expiration: {
-                maxEntries: 50,
-                maxAgeSeconds: 60 * 60 * 24 * 7,
-              },
-            },
-          },
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
             handler: "CacheFirst",
@@ -107,17 +96,20 @@ export default defineConfig(({ mode }) => ({
             handler: "NetworkFirst",
             options: {
               cacheName: "supabase-api-cache",
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
               expiration: {
                 maxEntries: 100,
                 maxAgeSeconds: 60 * 5,
               },
-              networkTimeoutSeconds: 10,
+              networkTimeoutSeconds: 8,
             },
           },
         ],
         cleanupOutdatedCaches: true,
-        skipWaiting: true,
-        clientsClaim: true,
+        skipWaiting: false,
+        clientsClaim: false,
       },
       devOptions: {
         enabled: true,

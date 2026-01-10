@@ -1,4 +1,4 @@
-import { createRoot } from "react-dom/client";
+﻿import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import "./index.css";
 import { registerSW } from 'virtual:pwa-register';
@@ -9,15 +9,16 @@ import { AppErrorBoundary } from "./components/AppErrorBoundary";
 // Registrar Service Worker
 const updateSW = registerSW({
   onNeedRefresh() {
-    console.log('Nueva versión disponible - Actualizando...');
+    updateSW(true);
+    window.location.reload();
   },
   onOfflineReady() {
-    console.log('Aplicación lista para funcionar offline');
+    console.log("Aplicacion lista para funcionar offline");
   },
-  immediate: true
+  immediate: false,
 });
 
-// Configurar handler de offline para recarga automática
+// Configurar handler offline
 setupOfflineHandler();
 
 // Inicializar DB y limpiar operaciones obsoletas
@@ -34,3 +35,5 @@ createRoot(document.getElementById("root")!).render(
     <App />
   </AppErrorBoundary>
 );
+
+
