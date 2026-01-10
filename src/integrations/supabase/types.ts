@@ -763,7 +763,11 @@ export type Database = {
         Returns: Json
       }
       bulk_add_to_my_stock: {
-        Args: { p_product_ids: string[]; p_quantity?: number; p_stock_threshold?: number }
+        Args: {
+          p_product_ids: string[]
+          p_quantity?: number
+          p_stock_threshold?: number
+        }
         Returns: Json
       }
       bulk_adjust_stock: { Args: { p_adjustments: Json }; Returns: Json }
@@ -778,7 +782,10 @@ export type Database = {
         Returns: Json
       }
       bulk_delete_products: { Args: { p_product_ids: string[] }; Returns: Json }
-      bulk_remove_from_my_stock: { Args: { p_product_ids: string[] }; Returns: Json }
+      bulk_remove_from_my_stock: {
+        Args: { p_product_ids: string[] }
+        Returns: Json
+      }
       bulk_revert_usd_ars: {
         Args: {
           p_delivery_note_price_key?: string
