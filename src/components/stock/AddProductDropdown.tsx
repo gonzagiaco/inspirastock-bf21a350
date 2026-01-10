@@ -4,12 +4,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { addToMyStock, removeFromMyStock } from "@/lib/localDB";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useLocation } from "react-router-dom";
 
 interface AddProductDropdownProps {
@@ -73,13 +68,13 @@ export function AddProductDropdown({
         <div className="flex gap-1" data-interactive="true">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button 
-                size="sm" 
-                variant="outline" 
+              <Button
+                size="sm"
+                variant="outline"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
-                  e.stopPropagation();
                   onAddToRequest(product, mappingConfig);
+                  e.stopPropagation();
                 }}
                 className="flex-1"
               >
@@ -91,16 +86,16 @@ export function AddProductDropdown({
               <p>Agregar al pedido</p>
             </TooltipContent>
           </Tooltip>
-          
+
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button 
-                size="sm" 
-                variant="outline" 
+              <Button
+                size="sm"
+                variant="outline"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
-                  e.stopPropagation();
                   handleRemoveFromStock();
+                  e.stopPropagation();
                 }}
                 className="text-destructive hover:text-destructive hover:bg-destructive/10"
               >
@@ -123,9 +118,9 @@ export function AddProductDropdown({
       <div className="flex gap-1" data-interactive="true">
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button 
-              size="sm" 
-              variant="outline" 
+            <Button
+              size="sm"
+              variant="outline"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
@@ -134,7 +129,7 @@ export function AddProductDropdown({
               className="flex-1"
             >
               <ShoppingCart className="h-4 w-4" />
-              <span className={`${!isInMyStockPath ? 'sr-only' : ''}`}>Agregar al carrito</span>
+              <span className={`${!isInMyStockPath ? "sr-only" : ""}`}>Agregar al carrito</span>
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">
@@ -153,8 +148,8 @@ export function AddProductDropdown({
                   setHasBeenAddedToStock(true);
                 }}
                 onClick={(e) => {
-                  e.stopPropagation();
                   handleAddToStock();
+                  e.stopPropagation();
                 }}
                 disabled={shouldDisableAddToStock}
                 className={
@@ -162,9 +157,7 @@ export function AddProductDropdown({
                 }
               >
                 <Package className="h-4 w-4" />
-                <span className="sr-only">
-                  {shouldDisableAddToStock ? "Ya en Mi Stock" : "Agregar a Mi Stock"}
-                </span>
+                <span className="sr-only">{shouldDisableAddToStock ? "Ya en Mi Stock" : "Agregar a Mi Stock"}</span>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top">

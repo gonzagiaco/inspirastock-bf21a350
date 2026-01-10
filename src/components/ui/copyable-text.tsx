@@ -22,11 +22,11 @@ export function CopyableText({ children, textToCopy, className }: CopyableTextPr
         await navigator.clipboard.writeText(String(text));
         setCopied(true);
         setForceOpen(true);
-        
+
         setTimeout(() => {
           setCopied(false);
           setForceOpen(false);
-        }, 2000);
+        }, 1000);
       } catch (error) {
         console.error("Error al copiar:", error);
       }
@@ -38,10 +38,7 @@ export function CopyableText({ children, textToCopy, className }: CopyableTextPr
     <TooltipProvider delayDuration={200}>
       <Tooltip open={forceOpen || undefined}>
         <TooltipTrigger asChild>
-          <span
-            onClick={handleCopy}
-            className={cn("cursor-pointer hover:text-primary transition-colors", className)}
-          >
+          <span onClick={handleCopy} className={cn("cursor-pointer hover:text-primary transition-colors", className)}>
             {children}
           </span>
         </TooltipTrigger>
