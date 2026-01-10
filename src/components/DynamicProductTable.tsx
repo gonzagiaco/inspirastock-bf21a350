@@ -29,8 +29,10 @@ import { useListProducts } from "@/hooks/useListProducts";
 import { useDebounce } from "@/hooks/useDebounce";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { addToMyStock, localDB } from "@/lib/localDB";
+import { isOnline, localDB } from "@/lib/localDB";
+import { supabase } from "@/integrations/supabase/client";
 import {
+  bulkAddToMyStock,
   convertUsdToArsForProducts,
   deleteColumnsFromList,
   deleteProductsEverywhere,
@@ -480,7 +482,7 @@ export const DynamicProductTable = ({
     if (!selectedProducts.length) return;
     setIsBulkWorking(true);
     try {
-      await Promise.all(selectedProducts.map((p) => addToMyStock(p.id, 1)));
+      await bulkAddToMyStock({ productIds: selectedProducts.map((p) => p.id), quantity: 1 });
       toast.success(
         selectedProducts.length === 1 ? "Agregado a Mi Stock" : `${selectedProducts.length} productos agregados a Mi Stock`,
       );
@@ -498,27 +500,47 @@ export const DynamicProductTable = ({
   // Helper function to update cart prices after USD/ARS conversion
   const updateCartPricesAfterConversion = async (productIds: string[]) => {
     const cartPriceCol = mappingConfig?.cart_price_column;
-    
-    for (const productId of productIds) {
-      // Check if product is in the cart
-      const inCart = requestList.some((item) => item.productId === productId);
-      if (!inCart) continue;
+    const cartIds = new Set(requestList.map((item) => item.productId));
+    const idsToUpdate = productIds.filter((id) => cartIds.has(id));
+    if (!idsToUpdate.length) return;
 
-      // Get the updated price from the index
+    try {
+      if (isOnline()) {
+        const { data, error } = await supabase
+          .from("dynamic_products_index")
+          .select("product_id, price, calculated_data")
+          .in("product_id", idsToUpdate);
+        if (error) throw error;
+
+        for (const row of data ?? []) {
+          let newPrice: number | null = null;
+          if (cartPriceCol && row.calculated_data && cartPriceCol in (row.calculated_data as any)) {
+            newPrice = normalizeRawPrice((row.calculated_data as any)[cartPriceCol]);
+          }
+          if (newPrice == null && row.price != null) {
+            newPrice = normalizeRawPrice(row.price);
+          }
+          if (newPrice != null) {
+            updateItemPrice(row.product_id, newPrice);
+          }
+        }
+        return;
+      }
+    } catch (error) {
+      console.error("updateCartPricesAfterConversion (online) error:", error);
+    }
+
+    for (const productId of idsToUpdate) {
       const indexRecord = await localDB.dynamic_products_index.where({ product_id: productId }).first();
       if (!indexRecord) continue;
 
       let newPrice: number | null = null;
-      
-      // Priority: cart_price_column from calculated_data, then from index price
       if (cartPriceCol && indexRecord.calculated_data && cartPriceCol in (indexRecord.calculated_data as any)) {
         newPrice = normalizeRawPrice((indexRecord.calculated_data as any)[cartPriceCol]);
       }
-      
       if (newPrice == null && indexRecord.price != null) {
         newPrice = normalizeRawPrice(indexRecord.price);
       }
-
       if (newPrice != null) {
         updateItemPrice(productId, newPrice);
       }
@@ -616,6 +638,7 @@ export const DynamicProductTable = ({
         mappingConfig,
         columnSchema,
         targetKeys,
+        applyToAll: true,
       });
 
       if (!result.dollarRate) {
@@ -624,7 +647,7 @@ export const DynamicProductTable = ({
       }
 
       // Update cart prices for converted products
-      await updateCartPricesAfterConversion(products.map((p) => p.id));
+      await updateCartPricesAfterConversion(Array.from(new Set(requestList.map((item) => item.productId))));
 
       const skipped = result.skippedAlreadyConverted;
       toast.success(
@@ -668,10 +691,11 @@ export const DynamicProductTable = ({
         products,
         mappingConfig,
         targetKeys,
+        applyToAll: true,
       });
 
       // Update cart prices for reverted products
-      await updateCartPricesAfterConversion(products.map((p) => p.id));
+      await updateCartPricesAfterConversion(Array.from(new Set(requestList.map((item) => item.productId))));
 
       toast.success(
         result.reverted === 1 ? "Conversión revertida a USD" : `${result.reverted} productos revertidos a USD`,

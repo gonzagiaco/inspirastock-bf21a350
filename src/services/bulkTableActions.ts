@@ -1,5 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
-import { getOfficialDollarRate, isOnline, localDB, queueOperation } from "@/lib/localDB";
+import { addToMyStock, getOfficialDollarRate, isOnline, localDB, queueOperation, removeFromMyStock } from "@/lib/localDB";
 import { normalizeRawPrice } from "@/utils/numberParser";
 import type { ColumnSchema } from "@/types/productList";
 
@@ -105,6 +105,44 @@ async function getDollarRateWithFallback(): Promise<number> {
   return Number.isFinite(rate) ? rate : 0;
 }
 
+export async function bulkAddToMyStock(args: { productIds: string[]; quantity?: number; stockThreshold?: number }) {
+  const { productIds, quantity = 1, stockThreshold = 0 } = args;
+  if (!productIds.length) return { processed: 0 };
+
+  if (isOnline()) {
+    const { data, error } = await supabase.rpc("bulk_add_to_my_stock", {
+      p_product_ids: productIds,
+      p_quantity: quantity,
+      p_stock_threshold: stockThreshold,
+    });
+    if (error) throw error;
+    const result = data as any;
+    if (result?.success === false) throw new Error(result?.error || "bulk_add_to_my_stock failed");
+    return { processed: Number(result?.processed ?? productIds.length) };
+  }
+
+  await Promise.all(productIds.map((id) => addToMyStock(id, quantity, stockThreshold)));
+  return { processed: productIds.length };
+}
+
+export async function bulkRemoveFromMyStock(args: { productIds: string[] }) {
+  const { productIds } = args;
+  if (!productIds.length) return { processed: 0 };
+
+  if (isOnline()) {
+    const { data, error } = await supabase.rpc("bulk_remove_from_my_stock", {
+      p_product_ids: productIds,
+    });
+    if (error) throw error;
+    const result = data as any;
+    if (result?.success === false) throw new Error(result?.error || "bulk_remove_from_my_stock failed");
+    return { processed: Number(result?.processed ?? productIds.length) };
+  }
+
+  await Promise.all(productIds.map((id) => removeFromMyStock(id)));
+  return { processed: productIds.length };
+}
+
 export async function convertUsdToArsForProducts(args: {
   listId: string;
   products: Array<{
@@ -117,14 +155,11 @@ export async function convertUsdToArsForProducts(args: {
   mappingConfig?: any;
   columnSchema?: ColumnSchema[];
   targetKeys?: string[];
+  productIds?: string[];
+  applyToAll?: boolean;
 }): Promise<{ processed: number; updated: number; skippedAlreadyConverted: number; dollarRate: number; targetKeys: string[] }> {
   const { products, mappingConfig, columnSchema } = args;
   const now = new Date().toISOString();
-
-  const dollarRate = await getDollarRateWithFallback();
-  if (!dollarRate || dollarRate <= 0) {
-    return { processed: products.length, updated: 0, skippedAlreadyConverted: 0, dollarRate: 0, targetKeys: [] };
-  }
 
   const configuredTargets = mappingConfig?.dollar_conversion?.target_columns;
   const targetKeys = uniqStrings(
@@ -145,6 +180,37 @@ export async function convertUsdToArsForProducts(args: {
             : []),
         ],
   );
+
+  if (isOnline()) {
+    const primaryKey = mappingConfig?.price_primary_key ?? "price";
+    const deliveryNotePriceKey = mappingConfig?.delivery_note_price_column ?? null;
+    const selectedIds = args.applyToAll
+      ? null
+      : (args.productIds && args.productIds.length > 0 ? args.productIds : products.map((p) => p.id));
+    const { data, error } = await supabase.rpc("bulk_convert_usd_ars", {
+      p_list_id: args.listId,
+      p_product_ids: selectedIds && selectedIds.length ? selectedIds : null,
+      p_target_keys: targetKeys,
+      p_primary_key: primaryKey,
+      p_delivery_note_price_key: deliveryNotePriceKey ?? undefined,
+    });
+    if (error) throw error;
+    const result = data as any;
+    if (result?.success === false) throw new Error(result?.error || "bulk_convert_usd_ars failed");
+
+    return {
+      processed: Number(result?.processed ?? 0),
+      updated: Number(result?.updated ?? 0),
+      skippedAlreadyConverted: Number(result?.skipped ?? 0),
+      dollarRate: Number(result?.dollar_rate ?? 0),
+      targetKeys: (result?.target_keys as string[]) ?? targetKeys,
+    };
+  }
+
+  const dollarRate = await getDollarRateWithFallback();
+  if (!dollarRate || dollarRate <= 0) {
+    return { processed: products.length, updated: 0, skippedAlreadyConverted: 0, dollarRate: 0, targetKeys: [] };
+  }
 
   const {
     data: { user },
@@ -362,9 +428,35 @@ export async function revertUsdToArsForProducts(args: {
   products: Array<{ id: string }>;
   mappingConfig?: any;
   targetKeys?: string[];
+  productIds?: string[];
+  applyToAll?: boolean;
 }): Promise<{ processed: number; reverted: number; skippedNotConverted: number }> {
   const { products, mappingConfig } = args;
   const now = new Date().toISOString();
+
+  if (isOnline()) {
+    const primaryKey = mappingConfig?.price_primary_key ?? "price";
+    const deliveryNotePriceKey = mappingConfig?.delivery_note_price_column ?? null;
+    const selectedIds = args.applyToAll
+      ? null
+      : (args.productIds && args.productIds.length > 0 ? args.productIds : products.map((p) => p.id));
+    const { data, error } = await supabase.rpc("bulk_revert_usd_ars", {
+      p_list_id: args.listId,
+      p_product_ids: selectedIds && selectedIds.length ? selectedIds : null,
+      p_target_keys: args.targetKeys && args.targetKeys.length > 0 ? args.targetKeys : null,
+      p_primary_key: primaryKey,
+      p_delivery_note_price_key: deliveryNotePriceKey ?? undefined,
+    });
+    if (error) throw error;
+    const result = data as any;
+    if (result?.success === false) throw new Error(result?.error || "bulk_revert_usd_ars failed");
+
+    return {
+      processed: Number(result?.processed ?? 0),
+      reverted: Number(result?.reverted ?? 0),
+      skippedNotConverted: Number(result?.skipped ?? 0),
+    };
+  }
 
   const {
     data: { user },
@@ -537,6 +629,16 @@ export async function deleteProductsEverywhere(args: { productIds: string[] }) {
   } = await supabase.auth.getUser();
   if (!user) throw new Error("Usuario no autenticado");
 
+  if (isOnline()) {
+    const { data, error } = await supabase.rpc("bulk_delete_products", {
+      p_product_ids: productIds,
+    });
+    if (error) throw error;
+    const result = data as any;
+    if (result?.success === false) throw new Error(result?.error || "bulk_delete_products failed");
+    return { deleted: Number(result?.deleted ?? productIds.length) };
+  }
+
   const now = new Date().toISOString();
 
   const indexRecords = await localDB.dynamic_products_index.where("product_id").anyOf(productIds).toArray();
@@ -589,55 +691,20 @@ export async function deleteProductsEverywhere(args: { productIds: string[] }) {
     },
   );
 
-  if (isOnline()) {
-    if (requestToDelete.length) {
-      const { error } = await supabase
-        .from("request_items")
-        .delete()
-        .eq("user_id", user.id)
-        .in(
-          "product_id",
-          Array.from(new Set(requestToDelete.map((r) => r.product_id))),
-        );
-      if (error) throw error;
-    }
-
-    const { error: stockError } = await supabase
-      .from("my_stock_products")
-      .delete()
-      .eq("user_id", user.id)
-      .in("product_id", productIds);
-    if (stockError) throw stockError;
-
-    const { error: indexError } = await supabase.from("dynamic_products_index").delete().in("product_id", productIds);
-    if (indexError) throw indexError;
-
-    const { error: productsError } = await supabase.from("dynamic_products").delete().in("id", productIds);
-    if (productsError) throw productsError;
-
-    for (const [listId, nextCount] of nextCountsByListId.entries()) {
-      const { error: listError } = await supabase
-        .from("product_lists")
-        .update({ product_count: nextCount, updated_at: now })
-        .eq("id", listId);
-      if (listError) throw listError;
-    }
-  } else {
-    for (const id of productIds) {
-      await queueOperation("dynamic_products", "DELETE", id, {});
-    }
-    for (const idxId of indexIds) {
-      await queueOperation("dynamic_products_index", "DELETE", idxId, {});
-    }
-    for (const row of myStockToDelete) {
-      await queueOperation("my_stock_products", "DELETE", row.id, {});
-    }
-    for (const row of requestToDelete) {
-      await queueOperation("request_items", "DELETE", row.id, {});
-    }
-    for (const [listId, nextCount] of nextCountsByListId.entries()) {
-      await queueOperation("product_lists", "UPDATE", listId, { product_count: nextCount, updated_at: now });
-    }
+  for (const id of productIds) {
+    await queueOperation("dynamic_products", "DELETE", id, {});
+  }
+  for (const idxId of indexIds) {
+    await queueOperation("dynamic_products_index", "DELETE", idxId, {});
+  }
+  for (const row of myStockToDelete) {
+    await queueOperation("my_stock_products", "DELETE", row.id, {});
+  }
+  for (const row of requestToDelete) {
+    await queueOperation("request_items", "DELETE", row.id, {});
+  }
+  for (const [listId, nextCount] of nextCountsByListId.entries()) {
+    await queueOperation("product_lists", "UPDATE", listId, { product_count: nextCount, updated_at: now });
   }
 
   return { deleted: productIds.length };

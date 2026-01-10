@@ -762,7 +762,33 @@ export type Database = {
         Args: { p_fx_meta: Json; p_mapping: Json; p_new_calc: Json }
         Returns: Json
       }
+      bulk_add_to_my_stock: {
+        Args: { p_product_ids: string[]; p_quantity?: number; p_stock_threshold?: number }
+        Returns: Json
+      }
       bulk_adjust_stock: { Args: { p_adjustments: Json }; Returns: Json }
+      bulk_convert_usd_ars: {
+        Args: {
+          p_delivery_note_price_key?: string
+          p_list_id: string
+          p_primary_key?: string
+          p_product_ids?: string[]
+          p_target_keys?: string[]
+        }
+        Returns: Json
+      }
+      bulk_delete_products: { Args: { p_product_ids: string[] }; Returns: Json }
+      bulk_remove_from_my_stock: { Args: { p_product_ids: string[] }; Returns: Json }
+      bulk_revert_usd_ars: {
+        Args: {
+          p_delivery_note_price_key?: string
+          p_list_id: string
+          p_primary_key?: string
+          p_product_ids?: string[]
+          p_target_keys?: string[]
+        }
+        Returns: Json
+      }
       calculate_price_with_modifiers: {
         Args: {
           add_vat?: boolean

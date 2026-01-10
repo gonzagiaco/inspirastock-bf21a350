@@ -67,8 +67,9 @@ if (!self.define) {
     });
   };
 }
-define(['./workbox-44c91e4f'], (function (workbox) { 'use strict';
+define(['./workbox-147b8f7b'], (function (workbox) { 'use strict';
 
+  workbox.enable();
   self.skipWaiting();
   workbox.clientsClaim();
 
@@ -79,27 +80,13 @@ define(['./workbox-44c91e4f'], (function (workbox) { 'use strict';
    */
   workbox.precacheAndRoute([{
     "url": "/index.html",
-<<<<<<< Updated upstream
-    "revision": "0.eh9b2t73nlg"
-=======
-    "revision": "0.aqt5kmblau8"
->>>>>>> Stashed changes
+    "revision": "0.0g62d1fl1d"
   }], {});
   workbox.cleanupOutdatedCaches();
   workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("/index.html"), {
     allowlist: [/^\/$/],
     denylist: [/^\/api/, /^\/auth/]
   }));
-  workbox.registerRoute(({
-    request
-  }) => request.mode === "navigate", new workbox.NetworkFirst({
-    "cacheName": "pages-cache",
-    "networkTimeoutSeconds": 3,
-    plugins: [new workbox.ExpirationPlugin({
-      maxEntries: 50,
-      maxAgeSeconds: 604800
-    })]
-  }), 'GET');
   workbox.registerRoute(/^https:\/\/fonts\.googleapis\.com\/.*/i, new workbox.CacheFirst({
     "cacheName": "google-fonts-cache",
     plugins: [new workbox.ExpirationPlugin({
@@ -120,8 +107,10 @@ define(['./workbox-44c91e4f'], (function (workbox) { 'use strict';
   }), 'GET');
   workbox.registerRoute(/^https:\/\/.*\.supabase\.co\/.*/i, new workbox.NetworkFirst({
     "cacheName": "supabase-api-cache",
-    "networkTimeoutSeconds": 10,
-    plugins: [new workbox.ExpirationPlugin({
+    "networkTimeoutSeconds": 8,
+    plugins: [new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    }), new workbox.ExpirationPlugin({
       maxEntries: 100,
       maxAgeSeconds: 300
     })]

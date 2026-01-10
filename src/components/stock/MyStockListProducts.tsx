@@ -10,7 +10,8 @@ import { StockThresholdCell } from "./StockThresholdCell";
 import { ProductCardView } from "@/components/ProductCardView";
 import { ColumnSchema, DynamicProduct } from "@/types/productList";
 import { normalizeRawPrice, formatARS } from "@/utils/numberParser";
-import { removeFromMyStock } from "@/lib/localDB";
+import { isOnline, removeFromMyStock } from "@/lib/localDB";
+import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -18,7 +19,7 @@ import { ColumnSettingsDrawer } from "@/components/ColumnSettingsDrawer";
 import { CardPreviewSettings } from "@/components/CardPreviewSettings";
 import { useProductListStore } from "@/stores/productListStore";
 import { useDebounce } from "@/hooks/useDebounce";
-import { convertUsdToArsForProducts, deleteColumnsFromList, revertUsdToArsForProducts } from "@/services/bulkTableActions";
+import { bulkRemoveFromMyStock, convertUsdToArsForProducts, deleteColumnsFromList, revertUsdToArsForProducts } from "@/services/bulkTableActions";
 import { useRequestCartStore } from "@/stores/requestCartStore";
 import {
   AlertDialog,
@@ -843,19 +844,49 @@ export const MyStockListProducts = memo(function MyStockListProducts({
 
   // Helper to update cart prices after USD/ARS conversion
   const updateCartPricesAfterConversion = useCallback(
-    (convertedProducts: any[]) => {
+    async (convertedProducts: any[]) => {
+      const cartPriceColumn = mappingConfig?.cart_price_column;
+      const cartIds = new Set(requestList.map((r) => r.productId));
+      const idsToUpdate = convertedProducts
+        .map((product) => product.product_id || product.id)
+        .filter((id: string | undefined) => Boolean(id && cartIds.has(id)));
+
+      if (!idsToUpdate.length) return;
+
+      try {
+        if (isOnline()) {
+          const { data, error } = await supabase
+            .from("dynamic_products_index")
+            .select("product_id, price, calculated_data")
+            .in("product_id", idsToUpdate);
+          if (error) throw error;
+
+          for (const row of data ?? []) {
+            let newPrice: number | null = null;
+            if (cartPriceColumn && row.calculated_data?.[cartPriceColumn] != null) {
+              newPrice = normalizeRawPrice(row.calculated_data[cartPriceColumn]);
+            }
+            if (newPrice == null && row.price != null) {
+              newPrice = normalizeRawPrice(row.price);
+            }
+            if (newPrice != null) {
+              updateItemPrice(row.product_id, newPrice);
+            }
+          }
+          return;
+        }
+      } catch (error) {
+        console.error("updateCartPricesAfterConversion (online) error:", error);
+      }
+
       for (const product of convertedProducts) {
         const productId = product.product_id || product.id;
-        const cartItem = requestList.find((r) => r.productId === productId);
-        if (!cartItem) continue;
+        if (!productId || !cartIds.has(productId)) continue;
 
-        const cartPriceColumn = mappingConfig?.cart_price_column;
         let newPrice = product.price;
-
         if (cartPriceColumn && product.calculated_data?.[cartPriceColumn] != null) {
           newPrice = product.calculated_data[cartPriceColumn];
         }
-
         if (newPrice != null && typeof newPrice === "number") {
           updateItemPrice(productId, newPrice);
         }
@@ -890,7 +921,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
       queryClient.invalidateQueries({ queryKey: ["delivery-note-with-items"], exact: false });
       
       // Update cart prices for converted products
-      updateCartPricesAfterConversion(selectedProducts);
+      await updateCartPricesAfterConversion(selectedProducts);
       
       setMenuState(null);
       clearSelection();
@@ -922,7 +953,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
       queryClient.invalidateQueries({ queryKey: ["delivery-note-with-items"], exact: false });
       
       // Update cart prices for reverted products
-      updateCartPricesAfterConversion(selectedProducts);
+      await updateCartPricesAfterConversion(selectedProducts);
       
       setMenuState(null);
       clearSelection();
@@ -1033,7 +1064,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
       onRemoveProducts?.(ids);
       if (!onRemoveProducts) ids.forEach((id) => onRemoveProduct?.(id));
 
-      await Promise.all(selectedProducts.map((p) => removeFromMyStock(p.id)));
+      await bulkRemoveFromMyStock({ productIds: selectedProducts.map((p) => p.id) });
       toast.success(ids.length === 1 ? "Producto quitado de Mi Stock" : `${ids.length} productos quitados de Mi Stock`);
       clearSelection();
       queryClient.invalidateQueries({ queryKey: ["my-stock"] });
