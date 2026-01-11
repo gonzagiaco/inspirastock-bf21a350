@@ -429,7 +429,6 @@ export async function syncFromSupabase(): Promise<void> {
     if (!user) {
       throw new Error("Usuario no autenticado");
     }
-
     console.log("ðŸ”„ Iniciando sincronizaciÃ³n desde Supabase...");
 
     // Sincronizar suppliers
@@ -605,7 +604,6 @@ export async function syncFromSupabase(): Promise<void> {
         console.log("âœ… 0 settings sincronizados (tabla vacÃ­a)");
       }
     }
-
     console.log("âœ… SincronizaciÃ³n completa desde Supabase");
     // const totalItems = (suppliers?.length || 0) + (productLists?.length || 0) + (productsIndex?.length || 0);
     // if (totalItems > 0) {
@@ -728,35 +726,99 @@ async function resolveRecordId(tableName: string, recordId: string): Promise<str
  * Deduplica operaciones pendientes antes de sincronizar
  * Mantiene solo la operaciÃ³n mÃ¡s reciente para cada combinaciÃ³n de table_name + record_id + operation_type
  */
-async function deduplicatePendingOperations(operations: PendingOperation[]): Promise<void> {
+function mergePendingOperation(previous: PendingOperation, next: PendingOperation): PendingOperation | null {
+  if (next.operation_type === "DELETE") {
+    if (previous.operation_type === "INSERT" && isTempId(previous.record_id)) {
+      return null;
+    }
+    return next;
+  }
+
+  if (next.operation_type === "INSERT") {
+    return next;
+  }
+
+  if (previous.operation_type === "DELETE") {
+    return previous;
+  }
+
+  const mergedData = { ...previous.data, ...next.data };
+  if (next.data?._snapshot) {
+    mergedData._snapshot = next.data._snapshot;
+  }
+
+  return {
+    table_name: previous.table_name,
+    operation_type: previous.operation_type,
+    record_id: previous.record_id,
+    data: mergedData,
+    timestamp: next.timestamp,
+    retry_count: Math.max(previous.retry_count ?? 0, next.retry_count ?? 0),
+  };
+}
+
+async function compactPendingOperations(operations: PendingOperation[]): Promise<void> {
   const operationsByKey = new Map<string, PendingOperation[]>();
 
   for (const op of operations) {
-    const key = `${op.table_name}:${op.record_id}:${op.operation_type}`;
+    const key = `${op.table_name}:${op.record_id}`;
     if (!operationsByKey.has(key)) {
       operationsByKey.set(key, []);
     }
     operationsByKey.get(key)!.push(op);
   }
 
-  let deletedCount = 0;
+  const idsToDelete: number[] = [];
+  const opsToAdd: PendingOperation[] = [];
+  let mergedCount = 0;
+  let droppedCount = 0;
 
-  for (const [key, ops] of operationsByKey.entries()) {
-    if (ops.length > 1) {
-      console.log(`âš ï¸ Detectadas ${ops.length} operaciones duplicadas para ${key}`);
-      // Ordenar por timestamp y mantener solo la Ãºltima
-      ops.sort((a, b) => a.timestamp - b.timestamp);
-      const toDelete = ops.slice(0, -1); // Eliminar todas excepto la Ãºltima
+  for (const ops of operationsByKey.values()) {
+    if (ops.length <= 1) continue;
 
-      for (const dupOp of toDelete) {
-        await localDB.pending_operations.delete(dupOp.id!);
-        deletedCount++;
+    ops.sort((a, b) => a.timestamp - b.timestamp);
+
+    let finalOp: PendingOperation | null = null;
+    for (const op of ops) {
+      if (!finalOp) {
+        finalOp = op;
+        continue;
       }
+      finalOp = mergePendingOperation(finalOp, op);
     }
+
+    for (const op of ops) {
+      if (op.id != null) idsToDelete.push(op.id);
+    }
+
+    if (!finalOp) {
+      droppedCount += ops.length;
+      continue;
+    }
+
+    opsToAdd.push({
+      table_name: finalOp.table_name,
+      operation_type: finalOp.operation_type,
+      record_id: finalOp.record_id,
+      data: finalOp.data,
+      timestamp: finalOp.timestamp,
+      retry_count: finalOp.retry_count ?? 0,
+    });
+    mergedCount += ops.length - 1;
   }
 
-  if (deletedCount > 0) {
-    console.log(`ðŸ—‘ï¸ Eliminadas ${deletedCount} operaciones duplicadas`);
+  if (idsToDelete.length > 0) {
+    await localDB.pending_operations.bulkDelete(idsToDelete);
+  }
+
+  if (opsToAdd.length > 0) {
+    await localDB.pending_operations.bulkAdd(opsToAdd);
+  }
+
+  if (mergedCount > 0 || droppedCount > 0) {
+    console.log(
+      `Pending ops compacted: merged=${mergedCount}, dropped=${droppedCount}, kept=${operations.length - mergedCount - droppedCount}`,
+    );
   }
 }
 
@@ -843,6 +905,128 @@ async function updateLocalRecordId(tableName: string, tempId: string, realId: st
   }
 }
 
+const BATCH_UPDATE_TABLES = new Set<string>([
+  "dynamic_products_index",
+  "dynamic_products",
+  "my_stock_products",
+  "request_items",
+  "stock_items",
+]);
+
+const BATCH_DELETE_TABLES = new Set<string>([
+  "dynamic_products_index",
+  "dynamic_products",
+  "my_stock_products",
+  "request_items",
+  "stock_items",
+]);
+
+const BATCH_SIZE = 200;
+
+type BatchOperation = {
+  op: PendingOperation;
+  realId: string;
+};
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (items.length === 0) return [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+async function registerBatchFailure(ops: PendingOperation[], error: any): Promise<void> {
+  const message = error?.message ?? "batch error";
+  for (const op of ops) {
+    const updatedOp = await localDB.pending_operations.get(op.id!);
+    if (!updatedOp) continue;
+    const newRetryCount = (updatedOp.retry_count ?? 0) + 1;
+
+    await localDB.pending_operations.put({
+      ...updatedOp,
+      retry_count: newRetryCount,
+      error: message,
+    });
+
+    if (newRetryCount >= 3) {
+      await rollbackStockCompensation(op.id!);
+      await localDB.pending_operations.delete(op.id!);
+      toast.error(`Operacion fallida: ${op.table_name}`);
+    }
+  }
+}
+
+async function executeBatchUpdates(ops: BatchOperation[]): Promise<{ successCount: number; errorCount: number }> {
+  let successCount = 0;
+  let errorCount = 0;
+
+  const byTable = new Map<string, BatchOperation[]>();
+  for (const item of ops) {
+    if (!byTable.has(item.op.table_name)) {
+      byTable.set(item.op.table_name, []);
+    }
+    byTable.get(item.op.table_name)!.push(item);
+  }
+
+  for (const [table, tableOps] of byTable.entries()) {
+    const chunks = chunkArray(tableOps, BATCH_SIZE);
+    for (const chunk of chunks) {
+      const rows = chunk.map(({ op, realId }) => ({ ...op.data, id: realId }));
+      const { error } = await supabase.from(table as any).upsert(rows, { onConflict: "id" });
+      if (error) {
+        errorCount += chunk.length;
+        await registerBatchFailure(chunk.map((item) => item.op), error);
+        continue;
+      }
+
+      for (const item of chunk) {
+        await localDB.pending_operations.delete(item.op.id!);
+        await clearStockCompensation(item.op.id!);
+      }
+      successCount += chunk.length;
+    }
+  }
+
+  return { successCount, errorCount };
+}
+
+async function executeBatchDeletes(ops: BatchOperation[]): Promise<{ successCount: number; errorCount: number }> {
+  let successCount = 0;
+  let errorCount = 0;
+
+  const byTable = new Map<string, BatchOperation[]>();
+  for (const item of ops) {
+    if (!byTable.has(item.op.table_name)) {
+      byTable.set(item.op.table_name, []);
+    }
+    byTable.get(item.op.table_name)!.push(item);
+  }
+
+  for (const [table, tableOps] of byTable.entries()) {
+    const chunks = chunkArray(tableOps, BATCH_SIZE);
+    for (const chunk of chunks) {
+      const ids = Array.from(new Set(chunk.map((item) => item.realId)));
+      if (ids.length === 0) continue;
+
+      const { error } = await supabase.from(table as any).delete().in("id", ids);
+      if (error) {
+        errorCount += chunk.length;
+        await registerBatchFailure(chunk.map((item) => item.op), error);
+        continue;
+      }
+
+      for (const item of chunk) {
+        await localDB.pending_operations.delete(item.op.id!);
+        await clearStockCompensation(item.op.id!);
+      }
+      successCount += chunk.length;
+    }
+  }
+
+  return { successCount, errorCount };
+}
 export async function syncPendingOperations(): Promise<void> {
   if (!isOnline()) {
     console.warn("âš ï¸ No hay conexiÃ³n. No se pueden sincronizar operaciones pendientes");
@@ -864,11 +1048,10 @@ export async function syncPendingOperations(): Promise<void> {
       console.log("âœ… No hay operaciones pendientes");
       return;
     }
-
     console.log(`ðŸ”„ Sincronizando ${operations.length} operaciones pendientes...`);
 
-    // Deduplicar operaciones antes de procesar
-    await deduplicatePendingOperations(operations);
+    // Compactar operaciones antes de procesar
+    await compactPendingOperations(operations);
 
     // Re-obtener despuÃ©s de deduplicaciÃ³n
     const dedupedOps = await localDB.pending_operations.toArray();
@@ -876,11 +1059,43 @@ export async function syncPendingOperations(): Promise<void> {
     // Ordenar por timestamp para respetar orden de creaciÃ³n
     const sortedOps = dedupedOps.sort((a, b) => a.timestamp - b.timestamp);
 
+    const sequentialOps: PendingOperation[] = [];
+    const batchUpdateOps: BatchOperation[] = [];
+    const batchDeleteOps: BatchOperation[] = [];
+
+    for (const op of sortedOps) {
+      if (
+        op.operation_type === "UPDATE" &&
+        BATCH_UPDATE_TABLES.has(op.table_name) &&
+        !op.data?._snapshot
+      ) {
+        const realId = await resolveRecordId(op.table_name, op.record_id);
+        if (isTempId(realId)) {
+          sequentialOps.push(op);
+          continue;
+        }
+        batchUpdateOps.push({ op, realId });
+        continue;
+      }
+
+      if (op.operation_type === "DELETE" && BATCH_DELETE_TABLES.has(op.table_name)) {
+        const realId = await resolveRecordId(op.table_name, op.record_id);
+        if (isTempId(realId)) {
+          sequentialOps.push(op);
+          continue;
+        }
+        batchDeleteOps.push({ op, realId });
+        continue;
+      }
+
+      sequentialOps.push(op);
+    }
+
     let successCount = 0;
     let errorCount = 0;
     let skippedCount = 0;
 
-    for (const op of sortedOps) {
+    for (const op of sequentialOps) {
       try {
         const result = await executeOperation(op);
 
@@ -929,7 +1144,17 @@ export async function syncPendingOperations(): Promise<void> {
         }
       }
     }
+    if (batchUpdateOps.length > 0) {
+      const batchUpdateResult = await executeBatchUpdates(batchUpdateOps);
+      successCount += batchUpdateResult.successCount;
+      errorCount += batchUpdateResult.errorCount;
+    }
 
+    if (batchDeleteOps.length > 0) {
+      const batchDeleteResult = await executeBatchDeletes(batchDeleteOps);
+      successCount += batchDeleteResult.successCount;
+      errorCount += batchDeleteResult.errorCount;
+    }
     console.log(
       `âœ… SincronizaciÃ³n completada: ${successCount} exitosas, ${errorCount} fallidas, ${skippedCount} saltadas`,
     );
@@ -1152,7 +1377,6 @@ async function executeDeliveryNoteUpdateWithItems(noteId: string, data: any): Pr
       console.error(`âŒ Error insertando items nuevos:`, insertError);
       throw insertError;
     }
-
     console.log(`  âœ… ${itemsToInsert.length} items sincronizados`);
   }
 
@@ -1847,7 +2071,6 @@ async function rollbackDeliveryNoteDelete(snapshot: {
         }
       }
     }
-
     console.log(`âœ… Rollback completado para remito ${snapshot.note.id}`);
   } catch (error) {
     console.error(`âŒ Error en rollback de remito:`, error);
@@ -1892,7 +2115,6 @@ async function rollbackDeliveryNoteUpdate(snapshot: {
         }
       }
     }
-
     console.log(`âœ… Rollback de actualizaciÃ³n completado para remito ${noteId}`);
   } catch (error) {
     console.error(`âŒ Error en rollback de actualizaciÃ³n de remito:`, error);
@@ -2264,7 +2486,6 @@ async function updateProductQuantityDelta(
         updated_at: now,
       });
     }
-
     console.log(`ƒo. Stock actualizado offline: ${productId} -> ${newQuantity}`);
   } else {
     console.warn(`ƒsÿ‹÷? Producto ${productId} no encontrado en dynamic_products`);
@@ -2985,6 +3206,17 @@ if (typeof window !== "undefined") {
 export function isSyncing(): boolean {
   return isSyncInProgress;
 }
+
+
+
+
+
+
+
+
+
+
+
 
 
 
