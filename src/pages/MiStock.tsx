@@ -17,6 +17,7 @@ import { RequestItem } from "@/types";
 import { exportOrdersBySupplier } from "@/utils/exportOrdersBySupplier";
 import { toast } from "sonner";
 import { useRequestCartStore } from "@/stores/requestCartStore";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 
 function parsePriceValue(value: any): number | null {
   if (value == null) return null;
@@ -31,7 +32,8 @@ export default function MiStock() {
   const [searchTerm, setSearchTerm] = useState("");
   const [onlyWithStock, setOnlyWithStock] = useState(false);
   const [isCartCollapsed, setIsCartCollapsed] = useState(true);
-  const { requestList, addOrIncrement, updateQuantity, removeItem } = useRequestCartStore();
+  const [isClearCartDialogOpen, setIsClearCartDialogOpen] = useState(false);
+  const { requestList, addOrIncrement, updateQuantity, removeItem, clear } = useRequestCartStore();
 
   // Estado local para actualizaciones optimistas
   const [localProducts, setLocalProducts] = useState<any[]>([]);
@@ -239,6 +241,11 @@ export default function MiStock() {
     });
   }, [requestList, suppliers]);
 
+  const handleClearCart = useCallback(() => {
+    if (requestList.length === 0) return;
+    setIsClearCartDialogOpen(true);
+  }, [requestList.length]);
+
   const totalProducts = productsToDisplay.length;
   const productsWithStock = productsToDisplay.filter((p: any) => (p.quantity || 0) > 0).length;
 
@@ -324,10 +331,21 @@ export default function MiStock() {
           requests={requestList}
           onUpdateQuantity={handleUpdateRequestQuantity}
           onRemove={handleRemoveFromRequest}
+          onClear={handleClearCart}
           onExport={handleExportToExcel}
           suppliers={suppliers}
           isCollapsed={isCartCollapsed}
           onToggleCollapse={() => setIsCartCollapsed(!isCartCollapsed)}
+        />
+        <DeleteConfirmDialog
+          open={isClearCartDialogOpen}
+          onOpenChange={setIsClearCartDialogOpen}
+          onConfirm={() => {
+            clear();
+            toast.success("Carrito vaciado");
+          }}
+          title="¿Vaciar carrito?"
+          description="Esta acción eliminará todos los productos del carrito. No se puede deshacer."
         />
 
         <div className="w-full">
