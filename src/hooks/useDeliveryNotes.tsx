@@ -40,6 +40,11 @@ const calculateItemsTotal = (
   return applyPercentageAdjustment(itemsSubtotal, globalAdjustmentPct);
 };
 
+const normalizeAdjustmentPct = (value?: number | null) => {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
 /**
  * C) OPTIMIZADO: Actualiza stock usando bulk RPC
  * Una sola llamada para múltiples productos
@@ -194,10 +199,10 @@ export const useDeliveryNotes = () => {
       const { data: user } = await supabase.auth.getUser();
       if (!user.user) throw new Error("No autenticado");
 
-      const globalAdjustmentPct = input.globalAdjustmentPct ?? 0;
+      const globalAdjustmentPct = normalizeAdjustmentPct(input.globalAdjustmentPct);
       const normalizedItems = input.items.map((item) => {
         const baseUnitPrice = item.unitPriceBase ?? item.unitPrice;
-        const adjustmentPct = item.adjustmentPct ?? 0;
+        const adjustmentPct = normalizeAdjustmentPct(item.adjustmentPct);
         const adjustedUnitPrice = applyPercentageAdjustment(baseUnitPrice, adjustmentPct);
         return {
           ...item,
@@ -280,7 +285,6 @@ export const useDeliveryNotes = () => {
           unit_price: item.adjustedUnitPrice,
           unit_price_base: item.unitPriceBase,
           adjustment_pct: item.adjustmentPct,
-          subtotal: item.subtotal,
           product_list_id: item.productListId ?? null,
           price_column_key_used: item.priceColumnKeyUsed ?? null,
         })),
@@ -325,7 +329,7 @@ export const useDeliveryNotes = () => {
         // Asegurar que se pasen los items para la reversión offline
         const mappedItems = updates.items?.map((item) => {
           const baseUnitPrice = item.unitPriceBase ?? item.unitPrice;
-          const adjustmentPct = item.adjustmentPct ?? 0;
+          const adjustmentPct = normalizeAdjustmentPct(item.adjustmentPct);
           const adjustedUnitPrice = applyPercentageAdjustment(baseUnitPrice, adjustmentPct);
           return {
             product_id: item.productId,
@@ -351,7 +355,9 @@ export const useDeliveryNotes = () => {
         if (updates.paidAmount !== undefined) offlineUpdates.paid_amount = updates.paidAmount;
         if (updates.notes !== undefined) offlineUpdates.notes = updates.notes;
         if (updates.extraFields !== undefined) offlineUpdates.extra_fields = updates.extraFields;
-        if (updates.globalAdjustmentPct !== undefined) offlineUpdates.global_adjustment_pct = updates.globalAdjustmentPct;
+        if (updates.globalAdjustmentPct !== undefined) {
+          offlineUpdates.global_adjustment_pct = normalizeAdjustmentPct(updates.globalAdjustmentPct);
+        }
 
         await updateDeliveryNoteOffline(id, offlineUpdates, mappedItems);
         return;
@@ -395,8 +401,9 @@ export const useDeliveryNotes = () => {
       }
 
       // PASO 3: Calcular nuevo total
-      const nextGlobalAdjustmentPct =
-        updates.globalAdjustmentPct ?? originalNote.global_adjustment_pct ?? 0;
+      const nextGlobalAdjustmentPct = Number.isFinite(Number(updates.globalAdjustmentPct))
+        ? Number(updates.globalAdjustmentPct)
+        : normalizeAdjustmentPct(originalNote.global_adjustment_pct);
 
       let normalizedItems: Array<any> | null = null;
       let newTotal = originalNote.total_amount;
@@ -404,7 +411,7 @@ export const useDeliveryNotes = () => {
       if (updates.items) {
         normalizedItems = updates.items.map((item) => {
           const baseUnitPrice = item.unitPriceBase ?? item.unitPrice;
-          const adjustmentPct = item.adjustmentPct ?? 0;
+          const adjustmentPct = normalizeAdjustmentPct(item.adjustmentPct);
           const adjustedUnitPrice = applyPercentageAdjustment(baseUnitPrice, adjustmentPct);
           return {
             ...item,
@@ -470,7 +477,6 @@ export const useDeliveryNotes = () => {
             unit_price: item.adjustedUnitPrice,
             unit_price_base: item.unitPriceBase,
             adjustment_pct: item.adjustmentPct,
-            subtotal: item.subtotal,
             product_list_id: item.productListId ?? null,
             price_column_key_used: item.priceColumnKeyUsed ?? null,
           })),
@@ -582,7 +588,7 @@ export const useDeliveryNotes = () => {
         if (!note) throw new Error("Remito no encontrado");
 
         const noteItems = (offlineItems || []).filter((item: any) => item.delivery_note_id === id);
-        const globalAdjustmentPct = Number(note.global_adjustment_pct ?? 0);
+        const globalAdjustmentPct = normalizeAdjustmentPct(note.global_adjustment_pct);
         const computedTotal =
           noteItems.length > 0 ? calculateItemsTotal(noteItems, globalAdjustmentPct) : Number(note.total_amount || 0);
 
@@ -601,7 +607,7 @@ export const useDeliveryNotes = () => {
 
       const computedTotal =
         Array.isArray(note.items) && note.items.length > 0
-          ? calculateItemsTotal(note.items, Number(note.global_adjustment_pct ?? 0))
+          ? calculateItemsTotal(note.items, normalizeAdjustmentPct(note.global_adjustment_pct))
           : Number(note.total_amount || 0);
 
       const { error } = await supabase

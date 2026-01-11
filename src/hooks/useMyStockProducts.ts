@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+﻿import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { localDB } from "@/lib/localDB";
 import { useOnlineStatus } from "./useOnlineStatus";
@@ -32,6 +32,7 @@ const logSync = (action: string, details?: any) => {
 };
 
 const IN_CLAUSE_BATCH_SIZE = 500;
+const MY_STOCK_PAGE_SIZE = 900;
 
 function chunkArray<T>(items: T[], chunkSize: number): T[][] {
   const chunks: T[][] = [];
@@ -60,6 +61,25 @@ async function fetchInBatches<T = any>(params: {
   );
 
   return results.flat();
+}
+
+async function fetchAllMyStockRows(userId: string): Promise<any[]> {
+  const rows: any[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("my_stock_products")
+      .select("id, product_id, user_id, quantity, stock_threshold, code, name, price, created_at, updated_at")
+      .eq("user_id", userId)
+      .order("id", { ascending: true })
+      .range(from, from + MY_STOCK_PAGE_SIZE - 1);
+    if (error) throw error;
+    const batch = data ?? [];
+    rows.push(...batch);
+    if (batch.length < MY_STOCK_PAGE_SIZE) break;
+    from += MY_STOCK_PAGE_SIZE;
+  }
+  return rows;
 }
 
 async function updateLocalMyStockCache(userId: string, rows: any[]): Promise<void> {
@@ -96,14 +116,14 @@ export function useMyStockProducts(options: UseMyStockProductsOptions = {}) {
 
       if (isOnline !== false) {
         // ONLINE (prioridad): fetch desde Supabase, usando my_stock_products como fuente de verdad.
-        const { data: myStockRows, error: myStockError } = await supabase
-          .from("my_stock_products")
-          .select("id, product_id, user_id, quantity, stock_threshold, code, name, price, created_at, updated_at")
-          .eq("user_id", user.id);
-
-        if (myStockError) {
+        let myStockRows: any[] = [];
+        let fetchFailed = false;
+        try {
+          myStockRows = await fetchAllMyStockRows(user.id);
+        } catch (myStockError) {
+          fetchFailed = true;
           console.error("Error fetching my_stock_products (online):", myStockError);
-          // Fallback a offline cache (2da opción)
+          // Fallback a offline cache (2da opcion)
           const offlineEntries = await localDB.my_stock_products.where({ user_id: user.id }).toArray();
           enrichedProducts = offlineEntries.map((entry: any) => ({
             ...entry,
@@ -116,7 +136,9 @@ export function useMyStockProducts(options: UseMyStockProductsOptions = {}) {
             quantity: entry.quantity ?? 0,
             stock_threshold: entry.stock_threshold ?? 0,
           }));
-        } else {
+        }
+
+        if (!fetchFailed) {
           const safeRows = (myStockRows ?? []) as any[];
           if (safeRows.length === 0) {
             await updateLocalMyStockCache(user.id, []);
@@ -336,3 +358,4 @@ export async function syncProductMyStockState(productId: string): Promise<void> 
     updated_at: data.updated_at,
   });
 }
+

@@ -349,6 +349,13 @@ export function GlobalProductSearch({
                         }}
                         mappingConfig={listInfo?.mapping_config}
                         onAddToRequest={onAddToRequest}
+                        onStockChange={(productId, patch) => {
+                          setLocalResults((prev) =>
+                            prev.map((p) =>
+                              p.product_id === productId ? { ...p, ...patch } : p,
+                            ),
+                          );
+                        }}
                         showAddToStock={true}
                       />
                     </TableCell>

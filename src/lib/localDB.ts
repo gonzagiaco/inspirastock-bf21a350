@@ -687,6 +687,28 @@ export async function queueOperation(
   console.log(`ðŸ“ OperaciÃ³n encolada: ${operationType} en ${tableName}`);
 }
 
+export async function queueOperationsBulk(
+  operations: Array<{
+    tableName: string;
+    operationType: "INSERT" | "UPDATE" | "DELETE";
+    recordId: string;
+    data: any;
+  }>,
+): Promise<void> {
+  if (!operations.length) return;
+  const now = Date.now();
+  const bulkOps: PendingOperation[] = operations.map((op, index) => ({
+    table_name: op.tableName,
+    operation_type: op.operationType,
+    record_id: op.recordId,
+    data: sanitizeDataForSync(op.tableName, op.operationType, op.data),
+    timestamp: now + index,
+    retry_count: 0,
+  }));
+  await localDB.pending_operations.bulkAdd(bulkOps);
+  console.log(`ÐY"? Operaciones encoladas en lote: ${bulkOps.length}`);
+}
+
 /**
  * VersiÃ³n de queueOperation que retorna el ID de la operaciÃ³n
  */
@@ -1366,7 +1388,6 @@ async function executeDeliveryNoteUpdateWithItems(noteId: string, data: any): Pr
       unit_price: item.unit_price,
       unit_price_base: item.unit_price_base ?? item.unit_price,
       adjustment_pct: item.adjustment_pct ?? 0,
-      subtotal: item.subtotal,
       product_list_id: item.product_list_id ?? null,
       price_column_key_used: item.price_column_key_used ?? null,
     }));
@@ -2677,7 +2698,10 @@ export async function addToMyStock(
     });
   } else {
     const newEntry: MyStockProductDB = {
-      id: isOnline() ? crypto.randomUUID() : generateTempId(),
+      id:
+        isOnline() && typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : generateTempId(),
       user_id: user.id,
       product_id: productId,
       quantity: newQuantity,
@@ -2703,42 +2727,14 @@ export async function addToMyStock(
   });
 
   if (isOnline()) {
-    if (existing) {
-      const { error } = await supabase
-        .from("my_stock_products")
-        .update({
-          quantity: newQuantity,
-          stock_threshold: nextThreshold,
-          updated_at: now,
-        })
-        .eq("id", existing.id);
-
-      if (error) throw error;
-    } else {
-      const inserted = await localDB.my_stock_products.where({ user_id: user.id, product_id: productId }).first();
-      if (inserted) {
-        const { error } = await supabase.from("my_stock_products").insert([
-          {
-            id: inserted.id,
-            user_id: inserted.user_id,
-            product_id: inserted.product_id,
-            quantity: inserted.quantity,
-            stock_threshold: inserted.stock_threshold,
-            code: inserted.code,
-            name: inserted.name,
-            price: inserted.price,
-            created_at: inserted.created_at,
-            updated_at: inserted.updated_at,
-          },
-        ]);
-        if (error) throw error;
-      }
-    }
-
-    await supabase
-      .from("dynamic_products_index")
-      .update({ quantity: newQuantity, updated_at: now })
-      .eq("product_id", productId);
+    const { data, error } = await supabase.rpc("bulk_add_to_my_stock", {
+      p_product_ids: [productId],
+      p_quantity: quantity,
+      p_stock_threshold: nextThreshold,
+    });
+    if (error) throw error;
+    const result = data as any;
+    if (result?.success === false) throw new Error(result?.error || "bulk_add_to_my_stock failed");
   } else {
     if (existing) {
       await queueOperation("my_stock_products", "UPDATE", existing.id, {
@@ -2761,6 +2757,196 @@ export async function addToMyStock(
       });
     }
   }
+}
+export async function bulkAddToMyStockOffline(args: {
+  productIds: string[];
+  quantity?: number;
+  stockThreshold?: number;
+}): Promise<{ processed: number }> {
+  const { productIds, quantity = 1, stockThreshold = 0 } = args;
+  if (!productIds.length) return { processed: 0 };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Usuario no autenticado");
+
+  const now = new Date().toISOString();
+  const indexRecords = await localDB.dynamic_products_index.where("product_id").anyOf(productIds).toArray();
+  const indexByProductId = new Map(indexRecords.map((r) => [r.product_id, r]));
+
+  const productRecords = await localDB.dynamic_products.where("id").anyOf(productIds).toArray();
+  const productById = new Map(productRecords.map((r) => [r.id, r]));
+
+  const existingMyStock = await localDB.my_stock_products.where("product_id").anyOf(productIds).toArray();
+  const existingByProductId = new Map(
+    existingMyStock.filter((row) => row.user_id === user.id).map((row) => [row.product_id, row]),
+  );
+
+  const myStockUpserts: MyStockProductDB[] = [];
+  const indexUpserts: DynamicProductIndexDB[] = [];
+  const productUpserts: DynamicProductDB[] = [];
+  const queueOps: Array<{ tableName: string; operationType: "INSERT" | "UPDATE" | "DELETE"; recordId: string; data: any }> = [];
+
+  for (const productId of productIds) {
+    const existing = existingByProductId.get(productId);
+    const indexRecord = indexByProductId.get(productId);
+    const productRecord = productById.get(productId);
+
+    if (!indexRecord || !productRecord) continue;
+
+    const newQuantity = (existing?.quantity || 0) + quantity;
+    const nextThreshold = stockThreshold ?? existing?.stock_threshold ?? 0;
+
+    if (existing) {
+      const updated = {
+        ...existing,
+        quantity: newQuantity,
+        stock_threshold: nextThreshold,
+        updated_at: now,
+      };
+      myStockUpserts.push(updated);
+      queueOps.push({
+        tableName: "my_stock_products",
+        operationType: "UPDATE",
+        recordId: existing.id,
+        data: {
+          quantity: newQuantity,
+          stock_threshold: nextThreshold,
+          updated_at: now,
+        },
+      });
+    } else {
+      const newEntry: MyStockProductDB = {
+        id: generateTempId(),
+        user_id: user.id,
+        product_id: productId,
+        quantity: newQuantity,
+        stock_threshold: nextThreshold,
+        code: indexRecord?.code ?? "",
+        name: indexRecord?.name ?? "",
+        price: indexRecord?.price ?? 0,
+        created_at: now,
+        updated_at: now,
+      };
+      myStockUpserts.push(newEntry);
+      queueOps.push({
+        tableName: "my_stock_products",
+        operationType: "INSERT",
+        recordId: newEntry.id,
+        data: newEntry,
+      });
+    }
+
+    indexUpserts.push({
+      ...indexRecord,
+      quantity: newQuantity,
+      updated_at: now,
+    });
+
+    productUpserts.push({
+      ...productRecord,
+      quantity: newQuantity,
+      updated_at: now,
+    });
+
+    queueOps.push({
+      tableName: "dynamic_products_index",
+      operationType: "UPDATE",
+      recordId: indexRecord.id,
+      data: {
+        quantity: newQuantity,
+        updated_at: now,
+      },
+    });
+
+    queueOps.push({
+      tableName: "dynamic_products",
+      operationType: "UPDATE",
+      recordId: productRecord.id,
+      data: {
+        quantity: newQuantity,
+        updated_at: now,
+      },
+    });
+  }
+
+  await localDB.transaction(
+    "rw",
+    [localDB.my_stock_products, localDB.dynamic_products_index, localDB.dynamic_products],
+    async () => {
+      if (myStockUpserts.length) await localDB.my_stock_products.bulkPut(myStockUpserts);
+      if (indexUpserts.length) await localDB.dynamic_products_index.bulkPut(indexUpserts);
+      if (productUpserts.length) await localDB.dynamic_products.bulkPut(productUpserts);
+    },
+  );
+
+  await queueOperationsBulk(queueOps);
+  return { processed: productIds.length };
+}
+
+export async function bulkRemoveFromMyStockOffline(args: { productIds: string[] }): Promise<{ processed: number }> {
+  const { productIds } = args;
+  if (!productIds.length) return { processed: 0 };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Usuario no autenticado");
+
+  const now = new Date().toISOString();
+  const myStockRows = await localDB.my_stock_products.where("product_id").anyOf(productIds).toArray();
+  const toDelete = myStockRows.filter((row) => row.user_id === user.id);
+
+  const indexRecords = await localDB.dynamic_products_index.where("product_id").anyOf(productIds).toArray();
+  const productRecords = await localDB.dynamic_products.where("id").anyOf(productIds).toArray();
+
+  const indexUpserts = indexRecords.map((record) => ({
+    ...record,
+    quantity: 0,
+    updated_at: now,
+  }));
+
+  const productUpserts = productRecords.map((record) => ({
+    ...record,
+    quantity: 0,
+    updated_at: now,
+  }));
+
+  await localDB.transaction(
+    "rw",
+    [localDB.my_stock_products, localDB.dynamic_products_index, localDB.dynamic_products],
+    async () => {
+      if (toDelete.length) await localDB.my_stock_products.bulkDelete(toDelete.map((row) => row.id) as any);
+      if (indexUpserts.length) await localDB.dynamic_products_index.bulkPut(indexUpserts);
+      if (productUpserts.length) await localDB.dynamic_products.bulkPut(productUpserts);
+    },
+  );
+
+  const queueOps: Array<{ tableName: string; operationType: "INSERT" | "UPDATE" | "DELETE"; recordId: string; data: any }> = [];
+
+  for (const row of toDelete) {
+    queueOps.push({ tableName: "my_stock_products", operationType: "DELETE", recordId: row.id, data: {} });
+  }
+  for (const record of indexRecords) {
+    queueOps.push({
+      tableName: "dynamic_products_index",
+      operationType: "UPDATE",
+      recordId: record.id,
+      data: { quantity: 0, updated_at: now },
+    });
+  }
+  for (const record of productRecords) {
+    queueOps.push({
+      tableName: "dynamic_products",
+      operationType: "UPDATE",
+      recordId: record.id,
+      data: { quantity: 0, updated_at: now },
+    });
+  }
+
+  await queueOperationsBulk(queueOps);
+  return { processed: productIds.length };
 }
 
 export async function removeFromMyStock(productId: string): Promise<void> {
@@ -3206,6 +3392,8 @@ if (typeof window !== "undefined") {
 export function isSyncing(): boolean {
   return isSyncInProgress;
 }
+
+
 
 
 

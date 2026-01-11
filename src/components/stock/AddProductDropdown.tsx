@@ -11,6 +11,7 @@ interface AddProductDropdownProps {
   product: any;
   mappingConfig?: any;
   onAddToRequest: (product: any, mappingConfig?: any, options?: { silent?: boolean }) => void;
+  onStockChange?: (productId: string, patch: { quantity?: number; stock_threshold?: number; in_my_stock?: boolean }) => void;
   showAddToStock?: boolean;
   showRemoveFromStock?: boolean;
 }
@@ -19,6 +20,7 @@ export function AddProductDropdown({
   product,
   mappingConfig,
   onAddToRequest,
+  onStockChange,
   showAddToStock = true,
   showRemoveFromStock = false,
 }: AddProductDropdownProps) {
@@ -29,15 +31,22 @@ export function AddProductDropdown({
   const [hasBeenAddedToStock, setHasBeenAddedToStock] = useState(false);
 
   const productId = product.product_id || product.id;
-  const syncListProductsCache = async (targetProductId: string) => {
+  const syncListProductsCache = async (
+    targetProductId: string,
+    overrides?: {
+      quantity?: number;
+      stock_threshold?: number;
+      in_my_stock?: boolean;
+    },
+  ) => {
     const [indexRow, stockRow] = await Promise.all([
       localDB.dynamic_products_index.where({ product_id: targetProductId }).first(),
       localDB.my_stock_products.where({ product_id: targetProductId }).first(),
     ]);
 
-    const nextQuantity = stockRow?.quantity ?? indexRow?.quantity ?? 0;
-    const nextThreshold = stockRow?.stock_threshold ?? indexRow?.stock_threshold ?? 0;
-    const inMyStock = Boolean(stockRow);
+    const nextQuantity = overrides?.quantity ?? stockRow?.quantity ?? indexRow?.quantity ?? 0;
+    const nextThreshold = overrides?.stock_threshold ?? stockRow?.stock_threshold ?? indexRow?.stock_threshold ?? 0;
+    const inMyStock = overrides?.in_my_stock ?? Boolean(stockRow);
 
     queryClient.setQueriesData({ queryKey: ["list-products"] }, (old: any) => {
       if (!old?.pages) return old;
@@ -59,15 +68,95 @@ export function AddProductDropdown({
       };
     });
   };
+  const syncGlobalSearchCache = (
+    targetProductId: string,
+    overrides?: {
+      quantity?: number;
+      stock_threshold?: number;
+      in_my_stock?: boolean;
+    },
+  ) => {
+    queryClient.setQueriesData({ queryKey: ["global-search"], exact: false }, (old: any) => {
+      if (!old?.pages) return old;
+      return {
+        ...old,
+        pages: old.pages.map((page: any) => ({
+          ...page,
+          data: (page.data ?? []).map((item: any) =>
+            item.product_id === targetProductId || item.id === targetProductId
+              ? {
+                  ...item,
+                  quantity: overrides?.quantity ?? item.quantity,
+                  stock_threshold: overrides?.stock_threshold ?? item.stock_threshold,
+                  in_my_stock: overrides?.in_my_stock ?? item.in_my_stock,
+                }
+              : item,
+          ),
+        })),
+      };
+    });
+  };
   const handleAddToStock = async () => {
+    const prevQuantity = Number(product.quantity || 0);
+    const prevInMyStock = Boolean(product.in_my_stock);
+    const nextQuantity = Math.max(1, prevQuantity + 1);
+    const optimisticPatch = { quantity: nextQuantity, in_my_stock: true };
+
     setHasBeenAddedToStock(true);
+    product.quantity = nextQuantity;
+    product.in_my_stock = true;
+    onStockChange?.(productId, optimisticPatch);
+    await syncListProductsCache(productId, optimisticPatch);
+    syncGlobalSearchCache(productId, optimisticPatch);
+    const now = new Date().toISOString();
+    queryClient.setQueriesData({ queryKey: ["my-stock"], exact: false }, (old: any) => {
+      if (!Array.isArray(old)) return old;
+      const exists = old.some((item: any) => item.product_id === productId);
+      if (exists) {
+        return old.map((item: any) =>
+          item.product_id === productId
+            ? {
+                ...item,
+                quantity: nextQuantity,
+                stock_threshold: item.stock_threshold ?? 0,
+                updated_at: now,
+                in_my_stock: true,
+              }
+            : item,
+        );
+      }
+
+      return [
+        {
+          id: productId,
+          product_id: productId,
+          list_id: product.listId || product.list_id || "",
+          code: product.code ?? "",
+          name: product.name ?? "",
+          price: product.price ?? null,
+          quantity: nextQuantity,
+          stock_threshold: 0,
+          calculated_data: product.calculated_data ?? {},
+          data: product.data ?? {},
+          created_at: now,
+          updated_at: now,
+        },
+        ...old,
+      ];
+    });
+
     try {
       await addToMyStock(productId, 1);
-      await syncListProductsCache(productId);
       toast.success("Agregado a Mi Stock");
       queryClient.invalidateQueries({ queryKey: ["my-stock"], exact: false });
     } catch (error) {
       console.error("Error al agregar a Mi Stock:", error);
+      const rollback = { quantity: prevQuantity, in_my_stock: prevInMyStock };
+      product.quantity = prevQuantity;
+      product.in_my_stock = prevInMyStock;
+      onStockChange?.(productId, rollback);
+      await syncListProductsCache(productId, rollback);
+      syncGlobalSearchCache(productId, rollback);
       setHasBeenAddedToStock(false);
       toast.error("Error al agregar a Mi Stock");
     }
@@ -76,12 +165,23 @@ export function AddProductDropdown({
   const handleRemoveFromStock = async () => {
     toast.success("Producto quitado de Mi Stock");
 
+    const rollback = { quantity: product.quantity || 0, in_my_stock: Boolean(product.in_my_stock) };
     try {
+      product.in_my_stock = false;
+      product.quantity = 0;
+      const optimisticPatch = { quantity: 0, in_my_stock: false };
+      onStockChange?.(productId, optimisticPatch);
+      await syncListProductsCache(productId, optimisticPatch);
+      syncGlobalSearchCache(productId, optimisticPatch);
       await removeFromMyStock(productId);
-      await syncListProductsCache(productId);
       queryClient.invalidateQueries({ queryKey: ["my-stock"], exact: false });
     } catch (error: any) {
       console.error("Error removing from stock:", error);
+      product.quantity = rollback.quantity;
+      product.in_my_stock = rollback.in_my_stock;
+      onStockChange?.(productId, rollback);
+      await syncListProductsCache(productId, rollback);
+      syncGlobalSearchCache(productId, rollback);
       toast.error("Error al quitar de Mi Stock");
     }
   };
@@ -175,10 +275,6 @@ export function AddProductDropdown({
               <Button
                 size="sm"
                 variant="outline"
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  setHasBeenAddedToStock(true);
-                }}
                 onClick={(e) => {
                   handleAddToStock();
                   e.stopPropagation();

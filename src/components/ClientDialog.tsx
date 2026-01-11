@@ -20,12 +20,15 @@ interface ClientDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   client?: DeliveryClient;
+  mode?: "create" | "edit";
 }
 
-const ClientDialog = ({ open, onOpenChange, client }: ClientDialogProps) => {
-  const { updateClient } = useDeliveryClients();
+const ClientDialog = ({ open, onOpenChange, client, mode }: ClientDialogProps) => {
+  const { createClient, updateClient } = useDeliveryClients();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState("");
+  const resolvedMode = mode ?? (client ? "edit" : "create");
+  const isEditing = resolvedMode === "edit";
 
   const {
     register,
@@ -38,39 +41,62 @@ const ClientDialog = ({ open, onOpenChange, client }: ClientDialogProps) => {
   });
 
   useEffect(() => {
-    if (!open || !client) return;
+    if (!open) return;
+    if (isEditing && client) {
+      reset({
+        name: client.name,
+        phone: client.phone || "",
+        address: client.address || "",
+      });
+      setPhoneNumber(client.phone || "");
+      return;
+    }
+
     reset({
-      name: client.name,
-      phone: client.phone || "",
-      address: client.address || "",
+      name: "",
+      phone: "",
+      address: "",
     });
-    setPhoneNumber(client.phone || "");
-  }, [client, open, reset]);
+    setPhoneNumber("");
+  }, [client, isEditing, open, reset]);
 
   const onSubmit = async (data: any) => {
-    if (!client) return;
-
     try {
       setIsSubmitting(true);
-      await updateClient({
-        ...client,
-        name: data.name,
-        phone: data.phone || "",
-        address: data.address || "",
-      });
+      if (isEditing) {
+        if (!client) return;
+        await updateClient({
+          ...client,
+          name: data.name,
+          phone: data.phone || "",
+          address: data.address || "",
+        });
+      } else {
+        await createClient({
+          name: data.name,
+          phone: data.phone || "",
+          address: data.address || "",
+        });
+      }
       onOpenChange(false);
+      reset({
+        name: "",
+        phone: "",
+        address: "",
+      });
+      setPhoneNumber("");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  if (!client) return null;
+  if (isEditing && !client) return null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Editar cliente</DialogTitle>
+          <DialogTitle>{isEditing ? "Editar cliente" : "Nuevo cliente"}</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -117,10 +143,10 @@ const ClientDialog = ({ open, onOpenChange, client }: ClientDialogProps) => {
               {isSubmitting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Guardando...
+                  {isEditing ? "Guardando..." : "Creando..."}
                 </>
               ) : (
-                "Guardar cambios"
+                isEditing ? "Guardar cambios" : "Crear cliente"
               )}
             </Button>
           </div>

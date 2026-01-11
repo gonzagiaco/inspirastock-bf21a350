@@ -29,17 +29,19 @@ import DeliveryNoteDialog from "@/components/DeliveryNoteDialog";
 import ClientDialog from "@/components/ClientDialog";
 import { generateDeliveryNotePDF } from "@/utils/deliveryNotePdfGenerator";
 import { uploadDeliveryNotePDF } from "@/services/pdfStorageService";
-import { Plus, Download, MessageCircle, Trash2, CheckCircle, Edit, Loader2, Receipt, X, Users, History } from "lucide-react";
+import { Plus, Download, MessageCircle, Trash2, CheckCircle, Edit, Loader2, Receipt, X, Users, History, UserPlus } from "lucide-react";
 import { format } from "date-fns";
 import { formatARS } from "@/utils/numberParser";
 import { DeliveryClient, DeliveryNote } from "@/types";
+import { applyPercentageAdjustment } from "@/utils/deliveryNotePricing";
 import Header from "@/components/Header";
 
 const getItemSubtotal = (item: any) => Number(item.quantity) * Number(item.unitPrice);
 
 const getNoteTotal = (note: DeliveryNote) => {
   if (note.items?.length) {
-    return note.items.reduce((sum, item) => sum + Number(item.subtotal ?? getItemSubtotal(item)), 0);
+    const itemsSubtotal = note.items.reduce((sum, item) => sum + Number(item.subtotal ?? getItemSubtotal(item)), 0);
+    return applyPercentageAdjustment(itemsSubtotal, note.globalAdjustmentPct ?? 0);
   }
 
   const totalAmount = Number(note.totalAmount || 0);
@@ -64,8 +66,9 @@ const buildNoteForOutput = (note: DeliveryNote): DeliveryNote => {
     subtotal: getItemSubtotal(item),
   }));
 
+  const itemsSubtotal = items.reduce((sum, item) => sum + Number(item.subtotal || 0), 0);
   const totalAmount = items.length
-    ? items.reduce((sum, item) => sum + Number(item.subtotal || 0), 0)
+    ? applyPercentageAdjustment(itemsSubtotal, note.globalAdjustmentPct ?? 0)
     : getNoteTotal(note);
   const paidAmount = Number(note.paidAmount || 0);
   const remainingBalance = Math.max(0, totalAmount - paidAmount);
@@ -88,6 +91,7 @@ const Remitos = () => {
   const [clientFilterId, setClientFilterId] = useState<string | null>(null);
   const [clientToEdit, setClientToEdit] = useState<DeliveryClient | null>(null);
   const [isClientDialogOpen, setIsClientDialogOpen] = useState(false);
+  const [isCreateClientDialogOpen, setIsCreateClientDialogOpen] = useState(false);
   const [clientToDelete, setClientToDelete] = useState<DeliveryClient | null>(null);
   const [isDeleteClientDialogOpen, setIsDeleteClientDialogOpen] = useState(false);
 
@@ -280,10 +284,20 @@ const Remitos = () => {
                 Clientes
               </TabsTrigger>
             </TabsList>
-            <Button onClick={() => handleOpenNewNote()}>
-              <Plus className="mr-2 h-4 w-4" />
-              Nuevo Remito
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                className="bg-emerald-600 text-white hover:bg-emerald-700"
+                onClick={() => setIsCreateClientDialogOpen(true)}
+              >
+                <UserPlus className="mr-2 h-4 w-4" />
+                Nuevo Cliente
+              </Button>
+              <Button onClick={() => handleOpenNewNote()}>
+                <Plus className="mr-2 h-4 w-4" />
+                Nuevo Remito
+              </Button>
+            </div>
           </div>
 
           <TabsContent value="remitos" className="space-y-6">
@@ -686,6 +700,12 @@ const Remitos = () => {
             if (!open) setClientToEdit(null);
           }}
           client={clientToEdit || undefined}
+        />
+
+        <ClientDialog
+          open={isCreateClientDialogOpen}
+          onOpenChange={setIsCreateClientDialogOpen}
+          mode="create"
         />
       </div>
     </div>
