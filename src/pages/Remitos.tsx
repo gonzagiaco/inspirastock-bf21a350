@@ -302,7 +302,7 @@ const Remitos = () => {
           <CardHeader>
             <CardTitle>Filtros</CardTitle>
           </CardHeader>
-          <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end min-w-0">
             <div className="space-y-1">
               <span className="text-sm font-medium">Cliente</span>
               <div className="relative">
@@ -337,13 +337,23 @@ const Remitos = () => {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1 min-w-0">
               <span className="text-sm font-medium">Desde</span>
-              <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+              <Input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="w-full min-w-0"
+              />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1 min-w-0">
               <span className="text-sm font-medium">Hasta</span>
-              <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+              <Input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="w-full min-w-0"
+              />
             </div>
           </CardContent>
         </Card>

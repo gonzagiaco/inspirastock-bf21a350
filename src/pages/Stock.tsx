@@ -21,6 +21,7 @@ import { GlobalProductSearch } from "@/components/GlobalProductsSearch";
 import { useMyStockProducts } from "@/hooks/useMyStockProducts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useRequestCartStore } from "@/stores/requestCartStore";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 
 // Helper function to extract name from product data for search results
 function extractNameFromFullData(data: Record<string, any>, schema: any[], mappingConfig?: any): string {
@@ -54,7 +55,8 @@ function extractNameFromFullData(data: Record<string, any>, schema: any[], mappi
 export default function Stock() {
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
   const [isCartCollapsed, setIsCartCollapsed] = useState(true);
-  const { requestList, addOrIncrement, updateQuantity, removeItem } = useRequestCartStore();
+  const [isClearCartDialogOpen, setIsClearCartDialogOpen] = useState(false);
+  const { requestList, addOrIncrement, updateQuantity, removeItem, clear } = useRequestCartStore();
 
   const { data: lists = [], isLoading: isLoadingLists } = useProductListsIndex();
   const { suppliers = [], isLoading: isLoadingSuppliers } = useSuppliers();
@@ -243,6 +245,11 @@ export default function Stock() {
     toast.success("Pedidos exportados", {
       description: `Se generaron ${uniqueSuppliers} archivo${uniqueSuppliers > 1 ? "s" : ""} (uno por proveedor)`,
     });
+  };
+
+  const handleClearCart = () => {
+    if (requestList.length === 0) return;
+    setIsClearCartDialogOpen(true);
   };
 
   const isSupplierSelectedNoTerm = supplierFilter !== "all" && searchTerm.trim() === "";
@@ -464,10 +471,21 @@ export default function Stock() {
           requests={requestList}
           onUpdateQuantity={handleUpdateRequestQuantity}
           onRemove={handleRemoveFromRequest}
+          onClear={handleClearCart}
           onExport={handleExportToExcel}
           suppliers={suppliers}
           isCollapsed={isCartCollapsed}
           onToggleCollapse={() => setIsCartCollapsed(!isCartCollapsed)}
+        />
+        <DeleteConfirmDialog
+          open={isClearCartDialogOpen}
+          onOpenChange={setIsClearCartDialogOpen}
+          onConfirm={() => {
+            clear();
+            toast.success("Carrito vaciado");
+          }}
+          title="¿Vaciar carrito?"
+          description="Esta acción eliminará todos los productos del carrito. No se puede deshacer."
         />
 
         <div className="w-full">

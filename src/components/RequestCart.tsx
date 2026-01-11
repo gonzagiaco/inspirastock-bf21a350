@@ -9,6 +9,7 @@ interface RequestCartProps {
   requests: RequestItem[];
   onUpdateQuantity: (id: string, quantity: number) => void;
   onRemove: (id: string) => void;
+  onClear: () => void;
   onExport: () => void;
   suppliers: Supplier[];
   isCollapsed: boolean;
@@ -19,6 +20,7 @@ const RequestCart = ({
   requests,
   onUpdateQuantity,
   onRemove,
+  onClear,
   onExport,
   suppliers,
   isCollapsed,
@@ -109,6 +111,14 @@ const RequestCart = ({
             >
               <FileDown className="mr-2 h-4 w-4" />
               Exportar Pedidos ({requests.length} productos)
+            </Button>
+            <Button
+              onClick={onClear}
+              className="w-full"
+              variant="outline"
+              disabled={requests.length === 0}
+            >
+              Limpiar carrito
             </Button>
             <div className="flex justify-between items-center">
               <span className="text-lg font-bold text-foreground">Total:</span>

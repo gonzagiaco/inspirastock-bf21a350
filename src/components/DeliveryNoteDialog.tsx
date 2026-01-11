@@ -12,7 +12,7 @@ import { DeliveryNote, CreateDeliveryNoteInput } from "@/types";
 import { useDeliveryNotes } from "@/hooks/useDeliveryNotes";
 import { useDeliveryClients } from "@/hooks/useDeliveryClients";
 import DeliveryNoteProductSearch from "./DeliveryNoteProductSearch";
-import { X, Plus, Minus, Loader2 } from "lucide-react";
+import { ChevronLeft, X, Plus, Minus, Loader2 } from "lucide-react";
 import { formatARS } from "@/utils/numberParser";
 import { applyPercentageAdjustment } from "@/utils/deliveryNotePricing";
 import { toast } from "sonner";
@@ -21,6 +21,7 @@ import { localDB } from "@/lib/localDB";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useProductLists } from "@/hooks/useProductLists";
 import { MappingConfig } from "@/components/suppliers/ListConfigurationView";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 
 const deliveryNoteSchema = z.object({
@@ -68,6 +69,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
   const { createDeliveryNote, updateDeliveryNote } = useDeliveryNotes();
   const { productLists } = useProductLists();
   const isOnline = useOnlineStatus();
+  const isMobile = useIsMobile();
   const { clients, createClient } = useDeliveryClients();
   const [items, setItems] = useState<CartItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -467,13 +469,35 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
   if (isLoadingNote) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-6xl min-h-[80vh] max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Cargando remito...</DialogTitle>
-          </DialogHeader>
-          <div className="flex items-center justify-center h-64">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          </div>
+        <DialogContent
+          className={
+            isMobile
+              ? "w-screen h-[100dvh] max-w-none max-h-none rounded-none p-0 overflow-y-auto"
+              : "max-w-6xl min-h-[80vh] max-h-[90vh] overflow-y-auto"
+          }
+        >
+          {isMobile ? (
+            <>
+              <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-3">
+                <Button type="button" variant="ghost" size="icon" onClick={() => onOpenChange(false)}>
+                  <ChevronLeft className="h-5 w-5" />
+                </Button>
+                <span className="text-base font-semibold">Cargando remito...</span>
+              </div>
+              <div className="flex items-center justify-center h-64 px-4">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>Cargando remito...</DialogTitle>
+              </DialogHeader>
+              <div className="flex items-center justify-center h-64">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     );
@@ -481,12 +505,27 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl min-h-[80vh] max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{note ? "Editar Remito" : "Nuevo Remito"}</DialogTitle>
-        </DialogHeader>
+      <DialogContent
+        className={
+          isMobile
+            ? "w-screen h-[100dvh] max-w-none max-h-none rounded-none p-0 overflow-y-auto"
+            : "max-w-6xl min-h-[80vh] max-h-[90vh] overflow-y-auto"
+        }
+      >
+        {isMobile ? (
+          <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-3">
+            <Button type="button" variant="ghost" size="icon" onClick={() => onOpenChange(false)}>
+              <ChevronLeft className="h-5 w-5" />
+            </Button>
+            <span className="text-base font-semibold">{note ? "Editar Remito" : "Nuevo Remito"}</span>
+          </div>
+        ) : (
+          <DialogHeader>
+            <DialogTitle>{note ? "Editar Remito" : "Nuevo Remito"}</DialogTitle>
+          </DialogHeader>
+        )}
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+        <form onSubmit={handleSubmit(onSubmit)} className={isMobile ? "space-y-6 px-4 pb-6 pt-4" : "space-y-6"}>
           <div className="space-y-3">
             <Label>Cliente</Label>
             <Tabs value={clientMode} onValueChange={(value) => setClientMode(value as "new" | "existing")}>
