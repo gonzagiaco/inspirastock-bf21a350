@@ -64,6 +64,15 @@ export const generateDeliveryNotePDFDocument = (note: DeliveryNote): jsPDF => {
   doc.line(20, currentY, 195, currentY);
   currentY += 8;
 
+  const globalAdjustmentPct = Number(note.globalAdjustmentPct ?? 0);
+  if (Number.isFinite(globalAdjustmentPct) && globalAdjustmentPct !== 0) {
+    const sign = globalAdjustmentPct > 0 ? "+" : "";
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.text(`Ajuste global: ${sign}${globalAdjustmentPct}%`, 180, currentY, { align: "right" });
+    currentY += 6;
+  }
+
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
   doc.text(`Total: ${formatARS(note.totalAmount)}`, 180, currentY, { align: "right" });

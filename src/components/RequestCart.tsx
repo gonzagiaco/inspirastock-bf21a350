@@ -115,7 +115,7 @@ const RequestCart = ({
             <Button
               onClick={onClear}
               className="w-full"
-              variant="outline"
+              variant="destructive"
               disabled={requests.length === 0}
             >
               Limpiar carrito

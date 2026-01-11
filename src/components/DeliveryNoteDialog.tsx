@@ -65,6 +65,13 @@ const createLineId = () => {
 const samePrice = (a: number, b: number) => Math.abs(a - b) < 0.0001;
 const OLD_PRICE_COLUMN_MESSAGE = "La columna de precio configurada para remitos cambió. Agrega el producto nuevamente para usar la nueva configuración.";
 
+const parseAdjustmentPct = (value: string | number) => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const normalized = value.trim().replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, initialClientId }: DeliveryNoteDialogProps) => {
   const { createDeliveryNote, updateDeliveryNote } = useDeliveryNotes();
   const { productLists } = useProductLists();
@@ -753,7 +760,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
                       type="number"
                       value={item.adjustmentPct ?? 0}
                       onChange={(e) => {
-                        const next = Number(e.target.value || 0);
+                        const next = parseAdjustmentPct(e.target.value || "0");
                         setItems((prev) =>
                           prev.map((i) => (i.lineId === item.lineId ? { ...i, adjustmentPct: next } : i)),
                         );
@@ -779,7 +786,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
           <Input
             type="number"
             value={globalAdjustmentPct}
-            onChange={(e) => setGlobalAdjustmentPct(Number(e.target.value || 0))}
+            onChange={(e) => setGlobalAdjustmentPct(parseAdjustmentPct(e.target.value || "0"))}
             className="w-20 h-8 text-sm"
           />
         </div>

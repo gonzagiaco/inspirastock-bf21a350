@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { List, LayoutGrid, ChevronUp, ChevronDown, Trash2, ShoppingCart, Search, X, DollarSign, ArrowUpDown, RotateCcw, MoreVertical, CheckSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -77,6 +77,9 @@ const areProductsShallowEqual = (prev: any[], next: any[]) => {
     if ((prevItem?.updated_at ?? null) !== (nextItem?.updated_at ?? null)) return false;
     if ((prevItem?.quantity ?? null) !== (nextItem?.quantity ?? null)) return false;
     if ((prevItem?.stock_threshold ?? null) !== (nextItem?.stock_threshold ?? null)) return false;
+    if ((prevItem?.price ?? null) !== (nextItem?.price ?? null)) return false;
+    if ((prevItem?.calculated_data ?? null) !== (nextItem?.calculated_data ?? null)) return false;
+    if ((prevItem?.data ?? null) !== (nextItem?.data ?? null)) return false;
   }
   return true;
 };
@@ -188,13 +191,15 @@ export const MyStockListProducts = memo(function MyStockListProducts({
       const ids = productIds.filter(Boolean);
       if (!ids.length) return;
 
-      const [indexRows, stockRows] = await Promise.all([
+      const [indexRows, stockRows, productRows] = await Promise.all([
         localDB.dynamic_products_index.where("product_id").anyOf(ids).toArray(),
         localDB.my_stock_products.where("product_id").anyOf(ids).toArray(),
+        localDB.dynamic_products.where("id").anyOf(ids).toArray(),
       ]);
 
       const indexMap = new Map(indexRows.map((row: any) => [row.product_id, row]));
       const stockMap = new Map(stockRows.map((row: any) => [row.product_id, row]));
+      const productMap = new Map(productRows.map((row: any) => [row.id, row]));
       const idSet = new Set(ids);
 
       queryClient.setQueriesData({ queryKey: ["list-products", listId] }, (old: any) => {
@@ -207,13 +212,17 @@ export const MyStockListProducts = memo(function MyStockListProducts({
               const indexRow = indexMap.get(item.product_id);
               if (!indexRow) return item;
               const stockRow = stockMap.get(item.product_id);
+              const productRow = productMap.get(item.product_id);
+              const nextData = productRow?.data ?? item.dynamic_products?.data ?? item.data;
               return {
                 ...item,
                 price: indexRow.price ?? item.price,
                 quantity: indexRow.quantity ?? item.quantity,
                 stock_threshold: stockRow?.stock_threshold ?? indexRow.stock_threshold ?? item.stock_threshold,
-                calculated_data: indexRow.calculated_data ?? item.calculated_data,
+                calculated_data: indexRow.calculated_data ? { ...indexRow.calculated_data } : item.calculated_data,
                 in_my_stock: Boolean(stockRow),
+                ...(nextData ? { data: { ...nextData } } : {}),
+                ...(nextData ? { dynamic_products: { ...(item.dynamic_products ?? {}), data: { ...nextData } } } : {}),
               };
             }),
           })),
@@ -228,17 +237,95 @@ export const MyStockListProducts = memo(function MyStockListProducts({
             const indexRow = indexMap.get(item.product_id);
             if (!indexRow) return item;
             const stockRow = stockMap.get(item.product_id);
+            const productRow = productMap.get(item.product_id);
             return {
               ...item,
               price: indexRow.price ?? item.price,
               quantity: stockRow?.quantity ?? indexRow.quantity ?? item.quantity,
               stock_threshold: stockRow?.stock_threshold ?? item.stock_threshold,
-              calculated_data: indexRow.calculated_data ?? item.calculated_data,
+              calculated_data: indexRow.calculated_data ? { ...indexRow.calculated_data } : item.calculated_data,
+              data: productRow?.data ? { ...productRow.data } : item.data,
             };
           });
       });
     },
     [listId, queryClient],
+  );
+
+  const chunkIds = (ids: string[], size = 500) => {
+    const chunks: string[][] = [];
+    for (let i = 0; i < ids.length; i += size) {
+      chunks.push(ids.slice(i, i + size));
+    }
+    return chunks;
+  };
+
+  const refreshAfterConversion = useCallback(
+    async (productIds: string[]) => {
+      const ids = productIds.filter(Boolean);
+      if (!ids.length) return;
+
+      if (isOnline()) {
+        try {
+          const chunks = chunkIds(ids);
+          const [fetchedIndex, fetchedProducts] = await Promise.all([
+            Promise.all(
+              chunks.map(async (chunk) => {
+                const { data, error } = await supabase
+                  .from("dynamic_products_index")
+                  .select("product_id, price, calculated_data, updated_at, quantity")
+                  .in("product_id", chunk);
+                if (error) throw error;
+                return (data ?? []) as any[];
+              }),
+            ),
+            Promise.all(
+              chunks.map(async (chunk) => {
+                const { data, error } = await supabase
+                  .from("dynamic_products")
+                  .select("id, list_id, data, updated_at")
+                  .in("id", chunk);
+                if (error) throw error;
+                return (data ?? []) as any[];
+              }),
+            ),
+          ]);
+
+          const rows = fetchedIndex.flat();
+          const products = fetchedProducts.flat();
+          if (rows.length || products.length) {
+            const now = new Date().toISOString();
+            await localDB.transaction(
+              "rw",
+              localDB.dynamic_products_index,
+              localDB.my_stock_products,
+              localDB.dynamic_products,
+              async () => {
+                if (rows.length) await localDB.dynamic_products_index.bulkPut(rows);
+                if (products.length) await localDB.dynamic_products.bulkPut(products);
+                if (rows.length) {
+                  const priceMap = new Map(rows.map((row) => [row.product_id, row.price]));
+                  const stockRows = await localDB.my_stock_products.where("product_id").anyOf(ids).toArray();
+                  const updates = stockRows.map((row) => {
+                    const nextPrice = priceMap.get(row.product_id);
+                    return nextPrice != null ? { ...row, price: nextPrice, updated_at: now } : row;
+                  });
+                  if (updates.length) {
+                    await localDB.my_stock_products.bulkPut(updates);
+                  }
+                }
+              },
+            );
+          }
+        } catch (error) {
+          console.error("refreshAfterConversion (online) error:", error);
+        }
+      }
+
+      await syncListCacheFromLocal(ids);
+      queryClient.invalidateQueries({ queryKey: ["my-stock"], exact: false });
+    },
+    [chunkIds, queryClient, syncListCacheFromLocal],
   );
 
   // Process schema: only mark quantity as isStandard (fixed)
@@ -672,7 +759,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
     setMenuState(null);
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!menuState) {
       setMenuPosition(null);
       return;
@@ -1058,14 +1145,12 @@ export const MyStockListProducts = memo(function MyStockListProducts({
         description: `Dólar oficial: $${result.dollarRate.toFixed(2)}`,
       });
 
-      queryClient.invalidateQueries({ queryKey: ["my-stock"] });
-      queryClient.invalidateQueries({ queryKey: ["list-products", listId], exact: false });
       queryClient.invalidateQueries({ queryKey: ["delivery-notes"] });
       queryClient.invalidateQueries({ queryKey: ["delivery-note-with-items"], exact: false });
       
       // Update cart prices for converted products
       await updateCartPricesAfterConversion(productsToProcess);
-      await syncListCacheFromLocal(productsToProcess.map((p) => p.id));
+      await refreshAfterConversion(productsToProcess.map((p) => p.id));
       
       setMenuState(null);
       clearSelection();
@@ -1095,14 +1180,12 @@ export const MyStockListProducts = memo(function MyStockListProducts({
         result.reverted === 1 ? "Conversión revertida a USD" : `${result.reverted} productos revertidos a USD`,
       );
 
-      queryClient.invalidateQueries({ queryKey: ["my-stock"] });
-      queryClient.invalidateQueries({ queryKey: ["list-products", listId], exact: false });
       queryClient.invalidateQueries({ queryKey: ["delivery-notes"] });
       queryClient.invalidateQueries({ queryKey: ["delivery-note-with-items"], exact: false });
       
       // Update cart prices for reverted products
       await updateCartPricesAfterConversion(productsToProcess);
-      await syncListCacheFromLocal(productsToProcess.map((p) => p.id));
+      await refreshAfterConversion(productsToProcess.map((p) => p.id));
       
       setMenuState(null);
       clearSelection();
@@ -1155,10 +1238,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
       );
 
       await updateCartPricesAfterConversion(products);
-      await syncListCacheFromLocal(products.map((p) => p.id));
-
-      queryClient.invalidateQueries({ queryKey: ["my-stock"] });
-      queryClient.invalidateQueries({ queryKey: ["list-products", listId], exact: false });
+      await refreshAfterConversion(products.map((p) => p.id));
       queryClient.invalidateQueries({ queryKey: ["delivery-notes"] });
       queryClient.invalidateQueries({ queryKey: ["delivery-note-with-items"], exact: false });
       setMenuState(null);
@@ -1195,10 +1275,7 @@ export const MyStockListProducts = memo(function MyStockListProducts({
       );
 
       await updateCartPricesAfterConversion(products);
-      await syncListCacheFromLocal(products.map((p) => p.id));
-
-      queryClient.invalidateQueries({ queryKey: ["my-stock"] });
-      queryClient.invalidateQueries({ queryKey: ["list-products", listId], exact: false });
+      await refreshAfterConversion(products.map((p) => p.id));
       queryClient.invalidateQueries({ queryKey: ["delivery-notes"] });
       queryClient.invalidateQueries({ queryKey: ["delivery-note-with-items"], exact: false });
       setMenuState(null);
@@ -1905,6 +1982,8 @@ export const MyStockListProducts = memo(function MyStockListProducts({
                 style={{
                   top: menuPosition?.top ?? menuState.top,
                   left: menuPosition?.left ?? menuState.left,
+                  visibility: menuPosition ? "visible" : "hidden",
+                  pointerEvents: menuPosition ? "auto" : "none",
                 }}
               >
                 {menuState.type === "rows" ? (

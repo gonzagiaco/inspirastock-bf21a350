@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import {
   useReactTable,
@@ -276,7 +276,7 @@ export const DynamicProductTable = ({
     };
   }, [menuState]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!menuState) {
       setMenuPosition(null);
       return;
@@ -1759,6 +1759,8 @@ export const DynamicProductTable = ({
                 style={{
                   top: menuPosition?.top ?? menuState.top,
                   left: menuPosition?.left ?? menuState.left,
+                  visibility: menuPosition ? "visible" : "hidden",
+                  pointerEvents: menuPosition ? "auto" : "none",
                 }}
               >
                 {menuState.type === "rows" ? (

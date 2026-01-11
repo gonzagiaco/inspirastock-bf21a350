@@ -128,17 +128,20 @@ export function ProductCardView({
 
         const priceChanged = prevItem?.price !== (nextItem as any)?.price;
         const calcChanged = prevItem?.calculated_data !== (nextItem as any)?.calculated_data;
+        const dataChanged = prevItem?.data !== (nextItem as any)?.data;
         const inStockChanged = prevItem?.in_my_stock !== (nextItem as any)?.in_my_stock;
+        const quantityChanged = prevItem?.quantity !== (nextItem as any)?.quantity;
+        const thresholdChanged = prevItem?.stock_threshold !== (nextItem as any)?.stock_threshold;
 
-        if (!priceChanged && !calcChanged && !inStockChanged) {
+        if (!priceChanged && !calcChanged && !dataChanged && !inStockChanged && !quantityChanged && !thresholdChanged) {
           return prevItem;
         }
 
         changed = true;
         return {
           ...nextItem,
-          quantity: prevItem?.quantity ?? (nextItem as any)?.quantity,
-          stock_threshold: prevItem?.stock_threshold ?? (nextItem as any)?.stock_threshold,
+          quantity: (nextItem as any)?.quantity ?? prevItem?.quantity,
+          stock_threshold: (nextItem as any)?.stock_threshold ?? prevItem?.stock_threshold,
         };
       });
 
@@ -673,6 +676,13 @@ export function ProductCardView({
                       product={{ ...product, listId }}
                       mappingConfig={mappingConfig}
                       onAddToRequest={onAddToRequest}
+                      onStockChange={(productId, patch) => {
+                        setLocalProducts((prev: any[]) =>
+                          prev.map((p: any) =>
+                            (p?.id ?? p?.product_id) === productId ? { ...p, ...patch } : p,
+                          ),
+                        );
+                      }}
                       showAddToStock={shouldShowAddToStock}
                     />
                   </div>

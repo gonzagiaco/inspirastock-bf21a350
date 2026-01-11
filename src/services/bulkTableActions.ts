@@ -1,5 +1,13 @@
 import { supabase } from "@/integrations/supabase/client";
-import { addToMyStock, getOfficialDollarRate, isOnline, localDB, queueOperation, removeFromMyStock } from "@/lib/localDB";
+import {
+  bulkAddToMyStockOffline,
+  bulkRemoveFromMyStockOffline,
+  getOfficialDollarRate,
+  isOnline,
+  localDB,
+  queueOperation,
+  queueOperationsBulk,
+} from "@/lib/localDB";
 import { normalizeRawPrice } from "@/utils/numberParser";
 import { applyPercentageAdjustment } from "@/utils/deliveryNotePricing";
 import type { ColumnSchema } from "@/types/productList";
@@ -111,19 +119,24 @@ export async function bulkAddToMyStock(args: { productIds: string[]; quantity?: 
   if (!productIds.length) return { processed: 0 };
 
   if (isOnline()) {
-    const { data, error } = await supabase.rpc("bulk_add_to_my_stock", {
-      p_product_ids: productIds,
-      p_quantity: quantity,
-      p_stock_threshold: stockThreshold,
-    });
-    if (error) throw error;
-    const result = data as any;
-    if (result?.success === false) throw new Error(result?.error || "bulk_add_to_my_stock failed");
-    return { processed: Number(result?.processed ?? productIds.length) };
+    const chunkSize = 900;
+    let processed = 0;
+    for (let i = 0; i < productIds.length; i += chunkSize) {
+      const chunk = productIds.slice(i, i + chunkSize);
+      const { data, error } = await supabase.rpc("bulk_add_to_my_stock", {
+        p_product_ids: chunk,
+        p_quantity: quantity,
+        p_stock_threshold: stockThreshold,
+      });
+      if (error) throw error;
+      const result = data as any;
+      if (result?.success === false) throw new Error(result?.error || "bulk_add_to_my_stock failed");
+      processed += Number(result?.processed ?? chunk.length);
+    }
+    return { processed };
   }
 
-  await Promise.all(productIds.map((id) => addToMyStock(id, quantity, stockThreshold)));
-  return { processed: productIds.length };
+  return await bulkAddToMyStockOffline({ productIds, quantity, stockThreshold });
 }
 
 export async function bulkRemoveFromMyStock(args: { productIds: string[] }) {
@@ -131,17 +144,22 @@ export async function bulkRemoveFromMyStock(args: { productIds: string[] }) {
   if (!productIds.length) return { processed: 0 };
 
   if (isOnline()) {
-    const { data, error } = await supabase.rpc("bulk_remove_from_my_stock", {
-      p_product_ids: productIds,
-    });
-    if (error) throw error;
-    const result = data as any;
-    if (result?.success === false) throw new Error(result?.error || "bulk_remove_from_my_stock failed");
-    return { processed: Number(result?.processed ?? productIds.length) };
+    const chunkSize = 900;
+    let processed = 0;
+    for (let i = 0; i < productIds.length; i += chunkSize) {
+      const chunk = productIds.slice(i, i + chunkSize);
+      const { data, error } = await supabase.rpc("bulk_remove_from_my_stock", {
+        p_product_ids: chunk,
+      });
+      if (error) throw error;
+      const result = data as any;
+      if (result?.success === false) throw new Error(result?.error || "bulk_remove_from_my_stock failed");
+      processed += Number(result?.processed ?? chunk.length);
+    }
+    return { processed };
   }
 
-  await Promise.all(productIds.map((id) => removeFromMyStock(id)));
-  return { processed: productIds.length };
+  return await bulkRemoveFromMyStockOffline({ productIds });
 }
 
 export async function convertUsdToArsForProducts(args: {
@@ -220,6 +238,12 @@ export async function convertUsdToArsForProducts(args: {
 
   let updated = 0;
   let skippedAlreadyConverted = 0;
+  const queueOps: Array<{
+    tableName: string;
+    operationType: "INSERT" | "UPDATE" | "DELETE";
+    recordId: string;
+    data: any;
+  }> = [];
 
   for (const product of products) {
     const productId = product.id;
@@ -364,22 +388,37 @@ export async function convertUsdToArsForProducts(args: {
           .eq("product_id", productId);
       }
     } else {
-      await queueOperation("dynamic_products_index", "UPDATE", indexId, {
-        calculated_data: mergedCalculated,
-        ...(nextPrimaryPrice != null ? { price: nextPrimaryPrice } : {}),
-        updated_at: now,
+      queueOps.push({
+        tableName: "dynamic_products_index",
+        operationType: "UPDATE",
+        recordId: indexId,
+        data: {
+          calculated_data: mergedCalculated,
+          ...(nextPrimaryPrice != null ? { price: nextPrimaryPrice } : {}),
+          updated_at: now,
+        },
       });
-      await queueOperation("dynamic_products", "UPDATE", productId, {
-        ...(nextPrimaryPrice != null ? { price: nextPrimaryPrice } : {}),
-        updated_at: now,
+      queueOps.push({
+        tableName: "dynamic_products",
+        operationType: "UPDATE",
+        recordId: productId,
+        data: {
+          ...(nextPrimaryPrice != null ? { price: nextPrimaryPrice } : {}),
+          updated_at: now,
+        },
       });
 
       if (nextPrimaryPrice != null) {
         const myStockRow = await localDB.my_stock_products.where({ user_id: user.id, product_id: productId }).first();
         if (myStockRow) {
-          await queueOperation("my_stock_products", "UPDATE", myStockRow.id, {
-            price: nextPrimaryPrice,
-            updated_at: now,
+          queueOps.push({
+            tableName: "my_stock_products",
+            operationType: "UPDATE",
+            recordId: myStockRow.id,
+            data: {
+              price: nextPrimaryPrice,
+              updated_at: now,
+            },
           });
         }
       }
@@ -419,21 +458,28 @@ export async function convertUsdToArsForProducts(args: {
             }),
           );
         } else {
-          await Promise.all(
-            updatedItems.map((item: any) =>
-              queueOperation("delivery_note_items", "UPDATE", item.id, {
+          updatedItems.forEach((item: any) => {
+            queueOps.push({
+              tableName: "delivery_note_items",
+              operationType: "UPDATE",
+              recordId: item.id,
+              data: {
                 unit_price: item.unit_price,
                 unit_price_base: item.unit_price_base,
                 adjustment_pct: item.adjustment_pct,
                 subtotal: item.subtotal,
-              }),
-            ),
-          );
+              },
+            });
+          });
         }
       }
     }
 
     updated += 1;
+  }
+
+  if (queueOps.length) {
+    await queueOperationsBulk(queueOps);
   }
 
   return { processed: products.length, updated, skippedAlreadyConverted, dollarRate, targetKeys };
@@ -481,6 +527,12 @@ export async function revertUsdToArsForProducts(args: {
 
   let reverted = 0;
   let skippedNotConverted = 0;
+  const queueOps: Array<{
+    tableName: string;
+    operationType: "INSERT" | "UPDATE" | "DELETE";
+    recordId: string;
+    data: any;
+  }> = [];
 
   for (const product of products) {
     const productId = product.id;
@@ -590,16 +642,19 @@ export async function revertUsdToArsForProducts(args: {
             }),
           );
         } else {
-          await Promise.all(
-            updatedItems.map((item: any) =>
-              queueOperation("delivery_note_items", "UPDATE", item.id, {
+          updatedItems.forEach((item: any) => {
+            queueOps.push({
+              tableName: "delivery_note_items",
+              operationType: "UPDATE",
+              recordId: item.id,
+              data: {
                 unit_price: item.unit_price,
                 unit_price_base: item.unit_price_base,
                 adjustment_pct: item.adjustment_pct,
                 subtotal: item.subtotal,
-              }),
-            ),
-          );
+              },
+            });
+          });
         }
       }
     }
@@ -629,25 +684,44 @@ export async function revertUsdToArsForProducts(args: {
           .eq("product_id", productId);
       }
     } else {
-      await queueOperation("dynamic_products_index", "UPDATE", indexId, {
-        calculated_data: nextCalculated,
-        ...(restoredPrimary != null ? { price: restoredPrimary } : {}),
-        updated_at: now,
+      queueOps.push({
+        tableName: "dynamic_products_index",
+        operationType: "UPDATE",
+        recordId: indexId,
+        data: {
+          calculated_data: nextCalculated,
+          ...(restoredPrimary != null ? { price: restoredPrimary } : {}),
+          updated_at: now,
+        },
       });
-      await queueOperation("dynamic_products", "UPDATE", productId, {
-        ...(restoredPrimary != null ? { price: restoredPrimary } : {}),
-        updated_at: now,
+      queueOps.push({
+        tableName: "dynamic_products",
+        operationType: "UPDATE",
+        recordId: productId,
+        data: {
+          ...(restoredPrimary != null ? { price: restoredPrimary } : {}),
+          updated_at: now,
+        },
       });
 
       if (restoredPrimary != null) {
         const myStockRow = await localDB.my_stock_products.where({ user_id: user.id, product_id: productId }).first();
         if (myStockRow) {
-          await queueOperation("my_stock_products", "UPDATE", myStockRow.id, { price: restoredPrimary, updated_at: now });
+          queueOps.push({
+            tableName: "my_stock_products",
+            operationType: "UPDATE",
+            recordId: myStockRow.id,
+            data: { price: restoredPrimary, updated_at: now },
+          });
         }
       }
     }
 
     reverted += 1;
+  }
+
+  if (queueOps.length) {
+    await queueOperationsBulk(queueOps);
   }
 
   return { processed: products.length, reverted, skippedNotConverted };
@@ -663,13 +737,19 @@ export async function deleteProductsEverywhere(args: { productIds: string[] }) {
   if (!user) throw new Error("Usuario no autenticado");
 
   if (isOnline()) {
-    const { data, error } = await supabase.rpc("bulk_delete_products", {
-      p_product_ids: productIds,
-    });
-    if (error) throw error;
-    const result = data as any;
-    if (result?.success === false) throw new Error(result?.error || "bulk_delete_products failed");
-    return { deleted: Number(result?.deleted ?? productIds.length) };
+    const chunkSize = 900;
+    let deleted = 0;
+    for (let i = 0; i < productIds.length; i += chunkSize) {
+      const chunk = productIds.slice(i, i + chunkSize);
+      const { data, error } = await supabase.rpc("bulk_delete_products", {
+        p_product_ids: chunk,
+      });
+      if (error) throw error;
+      const result = data as any;
+      if (result?.success === false) throw new Error(result?.error || "bulk_delete_products failed");
+      deleted += Number(result?.deleted ?? chunk.length);
+    }
+    return { deleted };
   }
 
   const now = new Date().toISOString();
@@ -724,21 +804,35 @@ export async function deleteProductsEverywhere(args: { productIds: string[] }) {
     },
   );
 
+  const queueOps: Array<{
+    tableName: string;
+    operationType: "INSERT" | "UPDATE" | "DELETE";
+    recordId: string;
+    data: any;
+  }> = [];
+
   for (const id of productIds) {
-    await queueOperation("dynamic_products", "DELETE", id, {});
+    queueOps.push({ tableName: "dynamic_products", operationType: "DELETE", recordId: id, data: {} });
   }
   for (const idxId of indexIds) {
-    await queueOperation("dynamic_products_index", "DELETE", idxId, {});
+    queueOps.push({ tableName: "dynamic_products_index", operationType: "DELETE", recordId: idxId, data: {} });
   }
   for (const row of myStockToDelete) {
-    await queueOperation("my_stock_products", "DELETE", row.id, {});
+    queueOps.push({ tableName: "my_stock_products", operationType: "DELETE", recordId: row.id, data: {} });
   }
   for (const row of requestToDelete) {
-    await queueOperation("request_items", "DELETE", row.id, {});
+    queueOps.push({ tableName: "request_items", operationType: "DELETE", recordId: row.id, data: {} });
   }
   for (const [listId, nextCount] of nextCountsByListId.entries()) {
-    await queueOperation("product_lists", "UPDATE", listId, { product_count: nextCount, updated_at: now });
+    queueOps.push({
+      tableName: "product_lists",
+      operationType: "UPDATE",
+      recordId: listId,
+      data: { product_count: nextCount, updated_at: now },
+    });
   }
+
+  await queueOperationsBulk(queueOps);
 
   return { deleted: productIds.length };
 }
