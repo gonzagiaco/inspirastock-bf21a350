@@ -22,6 +22,7 @@ import { useMyStockProducts } from "@/hooks/useMyStockProducts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useRequestCartStore } from "@/stores/requestCartStore";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import { useConfigStore } from "@/stores/configStore";
 
 // Helper function to extract name from product data for search results
 function extractNameFromFullData(data: Record<string, any>, schema: any[], mappingConfig?: any): string {
@@ -57,6 +58,7 @@ export default function Stock() {
   const [isCartCollapsed, setIsCartCollapsed] = useState(true);
   const [isClearCartDialogOpen, setIsClearCartDialogOpen] = useState(false);
   const { requestList, addOrIncrement, updateQuantity, removeItem, clear } = useRequestCartStore();
+  const { autoAddLowStockToCart, addDismissedLowStockIds } = useConfigStore();
 
   const { data: lists = [], isLoading: isLoadingLists } = useProductListsIndex();
   const { suppliers = [], isLoading: isLoadingSuppliers } = useSuppliers();
@@ -228,6 +230,10 @@ export default function Stock() {
   };
 
   const handleRemoveFromRequest = (id: string) => {
+    const removedItem = requestList.find((item) => item.id === id);
+    if (removedItem && autoAddLowStockToCart) {
+      addDismissedLowStockIds([removedItem.productId]);
+    }
     removeItem(id);
     toast.success("Producto eliminado del carrito");
   };
@@ -398,7 +404,6 @@ export default function Stock() {
   const myStockByProductId = useMemo(() => {
     return new Set<string>((myStockProducts ?? []).map((p: any) => p.product_id).filter(Boolean));
   }, [myStockProducts]);
-
   const globalResultsEnriched = useMemo(() => {
     return globalResults.map((item: any) => ({
       ...item,
@@ -481,6 +486,17 @@ export default function Stock() {
           open={isClearCartDialogOpen}
           onOpenChange={setIsClearCartDialogOpen}
           onConfirm={() => {
+            if (autoAddLowStockToCart) {
+              const lowStockIds = (myStockProducts ?? [])
+                .filter((product: any) => {
+                  const quantity = product.quantity ?? 0;
+                  const threshold = product.stock_threshold ?? 0;
+                  return threshold > 0 && quantity < threshold;
+                })
+                .map((product: any) => product.product_id || product.id)
+                .filter(Boolean) as string[];
+              addDismissedLowStockIds(lowStockIds);
+            }
             clear();
             toast.success("Carrito vaciado");
           }}

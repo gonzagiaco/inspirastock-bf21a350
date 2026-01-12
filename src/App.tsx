@@ -7,6 +7,7 @@ import { AuthProvider } from "@/hooks/useAuth";
 import ProtectedRoute from "./components/ProtectedRoute";
 import CollapsibleSidebar from "./components/CollapsibleSidebar";
 import { ConnectionBadge } from "./components/ConnectionBadge";
+import AutoAddLowStockToCart from "./components/AutoAddLowStockToCart";
 
 import Stock from "./pages/Stock";
 import MiStock from "./pages/MiStock";
@@ -36,6 +37,7 @@ const App = () => (
                 <ProtectedRoute>
                   <div className="flex min-h-screen w-full safe-top">
                     <CollapsibleSidebar />
+                    <AutoAddLowStockToCart />
                     <MiStock />
                   </div>
                 </ProtectedRoute>
@@ -47,6 +49,7 @@ const App = () => (
                 <ProtectedRoute>
                   <div className="flex min-h-screen w-full safe-top">
                     <CollapsibleSidebar />
+                    <AutoAddLowStockToCart />
                     <Stock />
                   </div>
                 </ProtectedRoute>
@@ -58,6 +61,7 @@ const App = () => (
                 <ProtectedRoute>
                   <div className="flex min-h-screen w-full safe-top">
                     <CollapsibleSidebar />
+                    <AutoAddLowStockToCart />
                     <Remitos />
                   </div>
                 </ProtectedRoute>
@@ -69,6 +73,7 @@ const App = () => (
                 <ProtectedRoute>
                   <div className="flex min-h-screen w-full safe-top">
                     <CollapsibleSidebar />
+                    <AutoAddLowStockToCart />
                     <Proveedores />
                   </div>
                 </ProtectedRoute>
@@ -80,6 +85,7 @@ const App = () => (
                 <ProtectedRoute>
                   <div className="flex min-h-screen w-full safe-top">
                     <CollapsibleSidebar />
+                    <AutoAddLowStockToCart />
                     <Ayuda />
                   </div>
                 </ProtectedRoute>
@@ -91,6 +97,7 @@ const App = () => (
                 <ProtectedRoute>
                   <div className="flex min-h-screen w-full safe-top">
                     <CollapsibleSidebar />
+                    <AutoAddLowStockToCart />
                     <Configuracion />
                   </div>
                 </ProtectedRoute>

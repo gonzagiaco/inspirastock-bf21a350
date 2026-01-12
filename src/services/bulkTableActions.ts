@@ -337,6 +337,9 @@ export async function convertUsdToArsForProducts(args: {
 }): Promise<{ processed: number; updated: number; skippedAlreadyConverted: number; dollarRate: number; targetKeys: string[] }> {
   const { products, mappingConfig, columnSchema } = args;
   const now = new Date().toISOString();
+  const notifyProductIds = uniqStrings(
+    args.productIds && args.productIds.length > 0 ? args.productIds : products.map((p) => p.id),
+  );
 
   const configuredTargets = mappingConfig?.dollar_conversion?.target_columns;
   const targetKeys = uniqStrings(
@@ -379,7 +382,7 @@ export async function convertUsdToArsForProducts(args: {
       try {
         await updateDeliveryNoteItemsOnline({
           listId: args.listId,
-          productIds: selectedIds && selectedIds.length ? selectedIds : undefined,
+          productIds: notifyProductIds.length ? notifyProductIds : undefined,
           mappingConfig,
         });
       } catch (updateError) {
@@ -388,7 +391,7 @@ export async function convertUsdToArsForProducts(args: {
 
       notifyDeliveryNoteRefresh({
         listId: args.listId,
-        productIds: selectedIds && selectedIds.length ? selectedIds : undefined,
+        productIds: notifyProductIds.length ? notifyProductIds : undefined,
       });
     }
 
@@ -652,7 +655,7 @@ export async function convertUsdToArsForProducts(args: {
   if (updated > 0) {
     notifyDeliveryNoteRefresh({
       listId: args.listId,
-      productIds: args.applyToAll ? undefined : products.map((p) => p.id),
+      productIds: notifyProductIds.length ? notifyProductIds : undefined,
     });
   }
 
@@ -669,6 +672,9 @@ export async function revertUsdToArsForProducts(args: {
 }): Promise<{ processed: number; reverted: number; skippedNotConverted: number }> {
   const { products, mappingConfig } = args;
   const now = new Date().toISOString();
+  const notifyProductIds = uniqStrings(
+    args.productIds && args.productIds.length > 0 ? args.productIds : products.map((p) => p.id),
+  );
 
   if (isOnline()) {
     const primaryKey = mappingConfig?.price_primary_key ?? "price";
@@ -691,7 +697,7 @@ export async function revertUsdToArsForProducts(args: {
       try {
         await updateDeliveryNoteItemsOnline({
           listId: args.listId,
-          productIds: selectedIds && selectedIds.length ? selectedIds : undefined,
+          productIds: notifyProductIds.length ? notifyProductIds : undefined,
           mappingConfig,
         });
       } catch (updateError) {
@@ -700,7 +706,7 @@ export async function revertUsdToArsForProducts(args: {
 
       notifyDeliveryNoteRefresh({
         listId: args.listId,
-        productIds: selectedIds && selectedIds.length ? selectedIds : undefined,
+        productIds: notifyProductIds.length ? notifyProductIds : undefined,
       });
     }
 
@@ -911,7 +917,7 @@ export async function revertUsdToArsForProducts(args: {
   if (reverted > 0) {
     notifyDeliveryNoteRefresh({
       listId: args.listId,
-      productIds: args.applyToAll ? undefined : products.map((p) => p.id),
+      productIds: notifyProductIds.length ? notifyProductIds : undefined,
     });
   }
 

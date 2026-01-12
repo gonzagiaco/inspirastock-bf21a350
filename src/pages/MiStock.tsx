@@ -18,6 +18,7 @@ import { exportOrdersBySupplier } from "@/utils/exportOrdersBySupplier";
 import { toast } from "sonner";
 import { useRequestCartStore } from "@/stores/requestCartStore";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import { useConfigStore } from "@/stores/configStore";
 
 function parsePriceValue(value: any): number | null {
   if (value == null) return null;
@@ -34,6 +35,7 @@ export default function MiStock() {
   const [isCartCollapsed, setIsCartCollapsed] = useState(true);
   const [isClearCartDialogOpen, setIsClearCartDialogOpen] = useState(false);
   const { requestList, addOrIncrement, updateQuantity, removeItem, clear } = useRequestCartStore();
+  const { autoAddLowStockToCart, addDismissedLowStockIds } = useConfigStore();
 
   // Estado local para actualizaciones optimistas
   const [localProducts, setLocalProducts] = useState<any[]>([]);
@@ -190,7 +192,10 @@ export default function MiStock() {
   }, [supplierSections, supplierFilter]);
 
   const handleAddToRequest = useCallback((product: any, mappingConfig?: any, options?: { silent?: boolean }) => {
-    const existingItem = requestList.find((r) => r.productId === product.id);
+    const productId = product.product_id || product.id;
+    if (!productId) return;
+
+    const existingItem = requestList.find((r) => r.productId === productId);
     const effectiveSupplierId = product.supplierId || product.supplier_id || "";
 
     if (existingItem) {
@@ -208,7 +213,7 @@ export default function MiStock() {
           typeof crypto !== "undefined" && "randomUUID" in crypto
             ? crypto.randomUUID()
             : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        productId: product.id,
+        productId,
         code: product.code || "",
         name: product.name || "",
         supplierId: effectiveSupplierId,
@@ -225,9 +230,14 @@ export default function MiStock() {
   }, [updateQuantity]);
 
   const handleRemoveFromRequest = useCallback((id: string) => {
+    const removedItem = requestList.find((item) => item.id === id);
+    if (removedItem && autoAddLowStockToCart) {
+      addDismissedLowStockIds([removedItem.productId]);
+    }
+
     removeItem(id);
     toast.success("Producto eliminado del carrito");
-  }, [removeItem]);
+  }, [addDismissedLowStockIds, autoAddLowStockToCart, removeItem, requestList]);
 
   const handleExportToExcel = useCallback(() => {
     if (requestList.length === 0) {
@@ -245,6 +255,70 @@ export default function MiStock() {
     if (requestList.length === 0) return;
     setIsClearCartDialogOpen(true);
   }, [requestList.length]);
+
+  const handleAddLowStockToCart = useCallback(() => {
+    const mappingConfigByListId = new Map<string, any>();
+    (lists as any[]).forEach((list) => {
+      if (list?.id) mappingConfigByListId.set(list.id, list.mapping_config);
+    });
+
+    let addedCount = 0;
+    let updatedCount = 0;
+
+    (productsToDisplay as any[]).forEach((product) => {
+      const quantity = product.quantity ?? 0;
+      const threshold = product.stock_threshold ?? 0;
+      if (threshold <= 0 || quantity >= threshold) return;
+
+      const productId = product.product_id || product.id;
+      if (!productId) return;
+
+      const neededQuantity = Math.max(0, threshold - quantity);
+      if (neededQuantity <= 0) return;
+
+      const existingItem = requestList.find((r) => r.productId === productId);
+      if (existingItem) {
+        if (existingItem.quantity < neededQuantity) {
+          updateQuantity(existingItem.id, neededQuantity);
+          updatedCount += 1;
+        }
+        return;
+      }
+
+      let finalPrice = parsePriceValue(product.price) ?? 0;
+      const cartPriceColumn = mappingConfigByListId.get(product.list_id)?.cart_price_column;
+      if (cartPriceColumn && product.calculated_data?.[cartPriceColumn]) {
+        const fromCalculated = parsePriceValue(product.calculated_data[cartPriceColumn]);
+        if (fromCalculated != null) finalPrice = fromCalculated;
+      }
+
+      const newRequest: RequestItem = {
+        id:
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        productId,
+        code: product.code || "",
+        name: product.name || "",
+        supplierId: product.supplierId || product.supplier_id || "",
+        costPrice: finalPrice,
+        quantity: neededQuantity,
+      };
+
+      addOrIncrement(newRequest);
+      addedCount += 1;
+    });
+
+    if (addedCount === 0 && updatedCount === 0) {
+      toast.info("No hay productos en bajo stock para agregar o ya fueron agregados previamente.");
+      return;
+    }
+
+    const parts = [];
+    if (addedCount > 0) parts.push(`${addedCount} agregado${addedCount === 1 ? "" : "s"}`);
+    if (updatedCount > 0) parts.push(`${updatedCount} actualizado${updatedCount === 1 ? "" : "s"}`);
+    toast.success(`Carrito actualizado: ${parts.join(", ")}`);
+  }, [addOrIncrement, lists, productsToDisplay, requestList, updateQuantity]);
 
   const totalProducts = productsToDisplay.length;
   const productsWithStock = productsToDisplay.filter((p: any) => (p.quantity || 0) > 0).length;
@@ -299,23 +373,42 @@ export default function MiStock() {
               </Select>
 
               <div className="flex items-center gap-2 px-3 py-2 border rounded-md bg-background">
-                <Switch id="only-with-stock" checked={onlyWithStock} onCheckedChange={setOnlyWithStock} />
-                <Label htmlFor="only-with-stock" className="text-sm whitespace-nowrap cursor-pointer">
+                <Switch
+                  id="only-with-stock"
+                  checked={onlyWithStock}
+                  onCheckedChange={setOnlyWithStock}
+                />
+                <Label
+                  htmlFor="only-with-stock"
+                  className="text-sm whitespace-nowrap cursor-pointer"
+                >
                   Sólo con stock
                 </Label>
               </div>
             </div>
           </div>
-
+          <div className="mb-4 flex justify-end">
+            <Button
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+              onClick={handleAddLowStockToCart}
+            >
+              Agregar bajo stock al carrito
+            </Button>
+          </div>
           <div className="flex items-center gap-3 flex-wrap text-sm text-muted-foreground">
             <span>{totalProducts} productos en mi stock</span>
             <span>•</span>
             <span>{productsWithStock} con stock disponible</span>
             <span>•</span>
             <span>
-              {visibleSupplierSections.length} {visibleSupplierSections.length === 1 ? "proveedor" : "proveedores"}
+              {visibleSupplierSections.length}{" "}
+              {visibleSupplierSections.length === 1
+                ? "proveedor"
+                : "proveedores"}
             </span>
-            {!isOnline && <span className="text-amber-500">(modo offline)</span>}
+            {!isOnline && (
+              <span className="text-amber-500">(modo offline)</span>
+            )}
           </div>
           {isRefreshing && (
             <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
@@ -341,6 +434,17 @@ export default function MiStock() {
           open={isClearCartDialogOpen}
           onOpenChange={setIsClearCartDialogOpen}
           onConfirm={() => {
+            if (autoAddLowStockToCart) {
+              const lowStockIds = productsToDisplay
+                .filter((product: any) => {
+                  const quantity = product.quantity ?? 0;
+                  const threshold = product.stock_threshold ?? 0;
+                  return threshold > 0 && quantity < threshold;
+                })
+                .map((product: any) => product.product_id || product.id)
+                .filter(Boolean) as string[];
+              addDismissedLowStockIds(lowStockIds);
+            }
             clear();
             toast.success("Carrito vaciado");
           }}
@@ -359,7 +463,9 @@ export default function MiStock() {
           ) : visibleSupplierSections.length === 0 ? (
             <Card className="p-12 text-center">
               <Package className="h-16 w-16 mx-auto mb-4 text-muted-foreground/50" />
-              <h3 className="text-lg font-semibold mb-2">No hay productos en tu stock</h3>
+              <h3 className="text-lg font-semibold mb-2">
+                No hay productos en tu stock
+              </h3>
               <p className="text-muted-foreground mb-4">
                 {searchTerm
                   ? `No se encontraron productos para "${searchTerm}"`
