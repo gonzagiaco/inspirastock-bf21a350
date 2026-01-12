@@ -257,7 +257,7 @@ const Remitos = () => {
   };
 
   return (
-    <div className="p-4 lg:px-4 lg:py-10 flex-1 overflow-auto">
+    <div className="p-4 pt-11 lg:px-4 lg:py-10 flex-1 overflow-auto">
       <div>
         <Header
           title="Remitos de Venta"

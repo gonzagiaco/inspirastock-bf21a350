@@ -18,7 +18,7 @@ const Ayuda = () => {
   const isMobile = useIsMobile();
 
   return (
-    <div className="flex-1 p-4 lg:px-4 lg:py-10">
+    <div className="flex-1 p-4 pt-11 lg:px-4 lg:py-10">
       <Header title="Ayuda" subtitle="¿Necesitas asistencia?" showSearch={false} />
 
       <div className="space-y-6">
