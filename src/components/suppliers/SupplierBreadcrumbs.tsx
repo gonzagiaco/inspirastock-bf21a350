@@ -9,6 +9,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useNavigationBlock } from "@/hooks/useNavigationBlock";
 
 interface BreadcrumbStep {
   label: string;
@@ -22,6 +23,17 @@ interface SupplierBreadcrumbsProps {
 
 export function SupplierBreadcrumbs({ steps, onBack }: SupplierBreadcrumbsProps) {
   const isMobile = useIsMobile();
+  const { triggerBlockedNavigation } = useNavigationBlock();
+
+  const handleBack = () => {
+    if (triggerBlockedNavigation()) return;
+    onBack();
+  };
+
+  const handleStepClick = (step: BreadcrumbStep) => {
+    if (triggerBlockedNavigation()) return;
+    step.onClick?.();
+  };
 
   if (steps.length === 0) return null;
 
@@ -34,7 +46,7 @@ export function SupplierBreadcrumbs({ steps, onBack }: SupplierBreadcrumbsProps)
           <Button
             variant="ghost"
             size="icon"
-            onClick={onBack}
+            onClick={handleBack}
             className="shrink-0"
           >
             <ChevronLeft className="h-5 w-5" />
@@ -54,7 +66,7 @@ export function SupplierBreadcrumbs({ steps, onBack }: SupplierBreadcrumbsProps)
         <Button
           variant="ghost"
           size="icon"
-          onClick={onBack}
+          onClick={handleBack}
           className="shrink-0"
         >
           <ChevronLeft className="h-5 w-5" />
@@ -73,7 +85,7 @@ export function SupplierBreadcrumbs({ steps, onBack }: SupplierBreadcrumbsProps)
                 ) : (
                   <>
                     <BreadcrumbLink
-                      onClick={step.onClick}
+                      onClick={() => handleStepClick(step)}
                       className="cursor-pointer hover:text-foreground transition-colors"
                     >
                       {step.label}

@@ -1,4 +1,4 @@
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   NotebookText,
   Users,
@@ -27,6 +27,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useNavigationBlock } from "@/hooks/useNavigationBlock";
 
 const ARG_TIMEZONE = "America/Argentina/Buenos_Aires";
 
@@ -68,6 +69,7 @@ const getNextArgentinaUpdate = (base: Date) => {
 
 const CollapsibleSidebar = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showLogout, setShowLogout] = useState(false);
@@ -76,6 +78,7 @@ const CollapsibleSidebar = () => {
   const [isRefreshingDollar, setIsRefreshingDollar] = useState(false);
   const { user, signOut } = useAuth();
   const refreshInFlightRef = useRef(false);
+  const { triggerBlockedNavigation } = useNavigationBlock();
 
   const getUserInitials = () => {
     if (user?.user_metadata?.full_name) {
@@ -320,13 +323,24 @@ const CollapsibleSidebar = () => {
           {navigation.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
+            
+            const handleNavClick = (e: React.MouseEvent) => {
+              e.preventDefault();
+              if (triggerBlockedNavigation()) {
+                // Navigation was blocked, don't navigate
+                return;
+              }
+              setIsMobileOpen(false);
+              navigate(item.href);
+            };
+            
             return (
-              <Link
+              <a
                 key={item.name}
-                to={item.href}
-                onClick={() => setIsMobileOpen(false)}
+                href={item.href}
+                onClick={handleNavClick}
                 className={`
-                  flex items-center rounded-xl
+                  flex items-center rounded-xl cursor-pointer
                   ${isCollapsed ? "justify-center p-3" : "gap-3 px-4 py-3"}
                   ${active ? "glassmorphism shadow-lg text-foreground" : "text-foreground"}
                 `}
@@ -336,7 +350,7 @@ const CollapsibleSidebar = () => {
                   <Icon className="h-6 w-6 text-primary" />
                 </div>
                 {!isCollapsed && <span className="font-medium text-lg">{item.name}</span>}
-              </Link>
+              </a>
             );
           })}
         </nav>
