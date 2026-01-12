@@ -9,12 +9,170 @@ import {
   queueOperationsBulk,
 } from "@/lib/localDB";
 import { normalizeRawPrice } from "@/utils/numberParser";
-import { applyPercentageAdjustment } from "@/utils/deliveryNotePricing";
+import { applyPercentageAdjustment, resolveDeliveryNoteUnitPrice } from "@/utils/deliveryNotePricing";
+import { notifyDeliveryNotePricesUpdated } from "@/utils/deliveryNoteEvents";
 import type { ColumnSchema } from "@/types/productList";
 
 function uniqStrings(values: Array<string | null | undefined>): string[] {
   return Array.from(new Set(values.filter((v): v is string => Boolean(v && v.trim()))));
 }
+
+const DEFAULT_PRICE_KEY = "price";
+
+const chunkArray = (values: string[], size = 500) => {
+  const chunks: string[][] = [];
+  for (let i = 0; i < values.length; i += size) {
+    chunks.push(values.slice(i, i + size));
+  }
+  return chunks;
+};
+
+const resolveDeliveryNotePriceKey = (item: any, mappingConfig?: any) => {
+  const explicit = typeof item?.price_column_key_used === "string" && item.price_column_key_used.trim()
+    ? item.price_column_key_used
+    : typeof item?.priceColumnKeyUsed === "string" && item.priceColumnKeyUsed.trim()
+      ? item.priceColumnKeyUsed
+      : null;
+  return explicit ?? mappingConfig?.delivery_note_price_column ?? mappingConfig?.price_primary_key ?? DEFAULT_PRICE_KEY;
+};
+
+const buildUpdatedDeliveryNoteItems = async (args: {
+  items: any[];
+  mappingConfig?: any;
+  indexMap: Map<string, any>;
+  productMap: Map<string, any>;
+}) => {
+  const { items, mappingConfig, indexMap, productMap } = args;
+
+  const updates = await Promise.all(
+    items.map(async (item) => {
+      const productId = item.product_id;
+      if (!productId) return null;
+
+      const indexRow = indexMap.get(productId);
+      const productRow = productMap.get(productId);
+      if (!indexRow && !productRow) return null;
+
+      const priceKey = resolveDeliveryNotePriceKey(item, mappingConfig);
+      const baseUnitPrice = await resolveDeliveryNoteUnitPrice(
+        priceKey,
+        mappingConfig,
+        productRow ?? indexRow ?? {},
+        { indexRow, localProductRow: productRow },
+      );
+      if (baseUnitPrice == null) return null;
+
+      const adjustmentPct = Number(item.adjustment_pct ?? 0);
+      const adjustedUnitPrice = applyPercentageAdjustment(baseUnitPrice, adjustmentPct);
+      const subtotal = Number(item.quantity ?? 0) * Number(adjustedUnitPrice);
+
+      return {
+        ...item,
+        unit_price_base: baseUnitPrice,
+        adjustment_pct: adjustmentPct,
+        unit_price: adjustedUnitPrice,
+        subtotal,
+      };
+    }),
+  );
+
+  return updates.filter(Boolean) as any[];
+};
+
+const updateDeliveryNoteItemsOnline = async (args: {
+  listId: string;
+  productIds?: string[];
+  mappingConfig?: any;
+}) => {
+  const { listId, productIds, mappingConfig } = args;
+  const ids = uniqStrings(productIds || []);
+
+  const noteItems: any[] = [];
+  if (ids.length) {
+    for (const chunk of chunkArray(ids)) {
+      const { data, error } = await supabase
+        .from("delivery_note_items")
+        .select("id, product_id, quantity, adjustment_pct, price_column_key_used")
+        .in("product_id", chunk);
+      if (error) throw error;
+      if (data?.length) noteItems.push(...data);
+    }
+  } else if (listId) {
+    const { data, error } = await supabase
+      .from("delivery_note_items")
+      .select("id, product_id, quantity, adjustment_pct, price_column_key_used")
+      .eq("product_list_id", listId);
+    if (error) throw error;
+    if (data?.length) noteItems.push(...data);
+  }
+
+  if (!noteItems.length) return;
+
+  const productIdsToFetch = uniqStrings(noteItems.map((item) => item.product_id));
+  if (!productIdsToFetch.length) return;
+
+  const indexRows: any[] = [];
+  const productRows: any[] = [];
+
+  for (const chunk of chunkArray(productIdsToFetch)) {
+    const [indexResult, productResult] = await Promise.all([
+      supabase
+        .from("dynamic_products_index")
+        .select("product_id, price, calculated_data")
+        .in("product_id", chunk),
+      supabase
+        .from("dynamic_products")
+        .select("id, price, data")
+        .in("id", chunk),
+    ]);
+    if (indexResult.error) throw indexResult.error;
+    if (productResult.error) throw productResult.error;
+    if (indexResult.data?.length) indexRows.push(...indexResult.data);
+    if (productResult.data?.length) productRows.push(...productResult.data);
+  }
+
+  const indexMap = new Map(indexRows.map((row) => [row.product_id, row]));
+  const productMap = new Map(productRows.map((row) => [row.id, row]));
+
+  const updatedItems = await buildUpdatedDeliveryNoteItems({
+    items: noteItems,
+    mappingConfig,
+    indexMap,
+    productMap,
+  });
+
+  if (!updatedItems.length) return;
+
+  await Promise.all(
+    updatedItems.map(async (item) => {
+      const { error } = await supabase
+        .from("delivery_note_items")
+        .update({
+          unit_price: item.unit_price,
+          unit_price_base: item.unit_price_base,
+          adjustment_pct: item.adjustment_pct,
+          subtotal: item.subtotal,
+        })
+        .eq("id", item.id);
+      if (error) throw error;
+    }),
+  );
+
+  await Promise.all(
+    updatedItems.map((item) =>
+      localDB.delivery_note_items.update(item.id, {
+        unit_price: item.unit_price,
+        unit_price_base: item.unit_price_base,
+        adjustment_pct: item.adjustment_pct,
+        subtotal: item.subtotal,
+      }),
+    ),
+  );
+};
+
+const notifyDeliveryNoteRefresh = (detail: { listId?: string; productIds?: string[] }) => {
+  notifyDeliveryNotePricesUpdated(detail);
+};
 
 export function sanitizeMappingConfigAfterDeletingColumns(mappingConfig: any | undefined, deletedKeys: string[]) {
   if (!mappingConfig) return mappingConfig;
@@ -217,6 +375,23 @@ export async function convertUsdToArsForProducts(args: {
     const result = data as any;
     if (result?.success === false) throw new Error(result?.error || "bulk_convert_usd_ars failed");
 
+    if (Number(result?.updated ?? 0) > 0) {
+      try {
+        await updateDeliveryNoteItemsOnline({
+          listId: args.listId,
+          productIds: selectedIds && selectedIds.length ? selectedIds : undefined,
+          mappingConfig,
+        });
+      } catch (updateError) {
+        console.error("updateDeliveryNoteItemsOnline (convert) error:", updateError);
+      }
+
+      notifyDeliveryNoteRefresh({
+        listId: args.listId,
+        productIds: selectedIds && selectedIds.length ? selectedIds : undefined,
+      });
+    }
+
     return {
       processed: Number(result?.processed ?? 0),
       updated: Number(result?.updated ?? 0),
@@ -333,15 +508,6 @@ export async function convertUsdToArsForProducts(args: {
 
     const mergedCalculated = { ...existingCalc, ...patch, ...meta };
 
-    const remitoPriceCol = mappingConfig?.delivery_note_price_column as string | null | undefined;
-    const remitoUnitPrice =
-      remitoPriceCol && mappingConfig?.price_primary_key && remitoPriceCol === mappingConfig.price_primary_key
-        ? nextPrimaryPrice
-        : remitoPriceCol
-          ? patch[remitoPriceCol] ?? null
-          : nextPrimaryPrice ?? null;
-    const remitoUnitPriceFallback = remitoUnitPrice ?? nextPrimaryPrice;
-
     await localDB.dynamic_products_index.update(indexId, {
       calculated_data: mergedCalculated,
       ...(nextPrimaryPrice != null ? { price: nextPrimaryPrice } : {}),
@@ -424,22 +590,23 @@ export async function convertUsdToArsForProducts(args: {
       }
     }
 
-    if (remitoUnitPriceFallback != null) {
-      const noteItems = await localDB.delivery_note_items.where("product_id").equals(productId).toArray();
-      if (noteItems.length) {
-        const updatedItems = noteItems.map((item: any) => {
-          const adjustmentPct = item.adjustment_pct ?? 0;
-          const baseUnitPrice = remitoUnitPriceFallback;
-          const adjustedUnitPrice = applyPercentageAdjustment(baseUnitPrice, adjustmentPct);
-          return {
-            ...item,
-            unit_price_base: baseUnitPrice,
-            adjustment_pct: adjustmentPct,
-            unit_price: adjustedUnitPrice,
-            subtotal: Number(item.quantity) * Number(adjustedUnitPrice),
-          };
-        });
+    const noteItems = await localDB.delivery_note_items.where("product_id").equals(productId).toArray();
+    if (noteItems.length) {
+      const localProductRow = await localDB.dynamic_products.get(productId);
+      const indexForPricing = {
+        ...(indexRecord || {}),
+        calculated_data: mergedCalculated,
+        ...(nextPrimaryPrice != null ? { price: nextPrimaryPrice } : {}),
+      };
 
+      const updatedItems = await buildUpdatedDeliveryNoteItems({
+        items: noteItems,
+        mappingConfig,
+        indexMap: new Map([[productId, indexForPricing]]),
+        productMap: localProductRow ? new Map([[productId, localProductRow]]) : new Map(),
+      });
+
+      if (updatedItems.length) {
         await localDB.delivery_note_items.bulkPut(updatedItems);
 
         if (isOnline()) {
@@ -482,6 +649,13 @@ export async function convertUsdToArsForProducts(args: {
     await queueOperationsBulk(queueOps);
   }
 
+  if (updated > 0) {
+    notifyDeliveryNoteRefresh({
+      listId: args.listId,
+      productIds: args.applyToAll ? undefined : products.map((p) => p.id),
+    });
+  }
+
   return { processed: products.length, updated, skippedAlreadyConverted, dollarRate, targetKeys };
 }
 
@@ -512,6 +686,23 @@ export async function revertUsdToArsForProducts(args: {
     if (error) throw error;
     const result = data as any;
     if (result?.success === false) throw new Error(result?.error || "bulk_revert_usd_ars failed");
+
+    if (Number(result?.reverted ?? 0) > 0) {
+      try {
+        await updateDeliveryNoteItemsOnline({
+          listId: args.listId,
+          productIds: selectedIds && selectedIds.length ? selectedIds : undefined,
+          mappingConfig,
+        });
+      } catch (updateError) {
+        console.error("updateDeliveryNoteItemsOnline (revert) error:", updateError);
+      }
+
+      notifyDeliveryNoteRefresh({
+        listId: args.listId,
+        productIds: selectedIds && selectedIds.length ? selectedIds : undefined,
+      });
+    }
 
     return {
       processed: Number(result?.processed ?? 0),
@@ -600,30 +791,23 @@ export async function revertUsdToArsForProducts(args: {
       }
     }
 
-    // Revert delivery_note_items unit_price back to current delivery_note_price_column if we can (fallback primary)
-    const remitoPriceCol = mappingConfig?.delivery_note_price_column as string | null | undefined;
-    const restoredRemitoUnitPrice =
-      remitoPriceCol && remitoPriceCol in restoredPatch
-        ? normalizeRawPrice(restoredPatch[remitoPriceCol])
-        : restoredPrimary != null
-          ? restoredPrimary
-          : null;
+    const noteItems = await localDB.delivery_note_items.where("product_id").equals(productId).toArray();
+    if (noteItems.length) {
+      const localProductRow = await localDB.dynamic_products.get(productId);
+      const indexForPricing = {
+        ...(indexRecord || {}),
+        calculated_data: nextCalculated,
+        ...(restoredPrimary != null ? { price: restoredPrimary } : {}),
+      };
 
-    if (restoredRemitoUnitPrice != null) {
-      const noteItems = await localDB.delivery_note_items.where("product_id").equals(productId).toArray();
-      if (noteItems.length) {
-        const updatedItems = noteItems.map((item: any) => {
-          const adjustmentPct = item.adjustment_pct ?? 0;
-          const baseUnitPrice = restoredRemitoUnitPrice;
-          const adjustedUnitPrice = applyPercentageAdjustment(baseUnitPrice, adjustmentPct);
-          return {
-            ...item,
-            unit_price_base: baseUnitPrice,
-            adjustment_pct: adjustmentPct,
-            unit_price: adjustedUnitPrice,
-            subtotal: Number(item.quantity) * Number(adjustedUnitPrice),
-          };
-        });
+      const updatedItems = await buildUpdatedDeliveryNoteItems({
+        items: noteItems,
+        mappingConfig,
+        indexMap: new Map([[productId, indexForPricing]]),
+        productMap: localProductRow ? new Map([[productId, localProductRow]]) : new Map(),
+      });
+
+      if (updatedItems.length) {
         await localDB.delivery_note_items.bulkPut(updatedItems);
 
         if (isOnline()) {
@@ -722,6 +906,13 @@ export async function revertUsdToArsForProducts(args: {
 
   if (queueOps.length) {
     await queueOperationsBulk(queueOps);
+  }
+
+  if (reverted > 0) {
+    notifyDeliveryNoteRefresh({
+      listId: args.listId,
+      productIds: args.applyToAll ? undefined : products.map((p) => p.id),
+    });
   }
 
   return { processed: products.length, reverted, skippedNotConverted };

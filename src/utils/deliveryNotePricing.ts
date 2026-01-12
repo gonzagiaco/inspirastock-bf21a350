@@ -67,9 +67,19 @@ export const resolveDeliveryNoteUnitPrice = async (
   sources: ProductSources,
 ): Promise<number | null> => {
   const primaryFallback = parsePriceValue(product?.price ?? sources.indexRow?.price ?? sources.localProductRow?.price);
-  
-  if (!mappingConfig) return primaryFallback;
+
   if (!priceColumnKey) return primaryFallback;
+
+  const primaryKey = mappingConfig?.price_primary_key ?? "price";
+  const fxRate =
+    parsePriceValue(sources.rpcProduct?.calculated_data?.__fx_usd_ars__rate) ??
+    parsePriceValue(sources.indexRow?.calculated_data?.__fx_usd_ars__rate);
+  const hasFxOriginal =
+    priceColumnKey === primaryKey
+      ? sources.indexRow?.calculated_data?.__fx_usd_ars__orig__price != null ||
+        sources.rpcProduct?.calculated_data?.__fx_usd_ars__orig__price != null
+      : sources.indexRow?.calculated_data?.[`__fx_usd_ars__orig__${priceColumnKey}`] != null ||
+        sources.rpcProduct?.calculated_data?.[`__fx_usd_ars__orig__${priceColumnKey}`] != null;
 
   // Buscar directamente en calculated_data (incluye conversión FX)
   const direct =
@@ -86,16 +96,28 @@ export const resolveDeliveryNoteUnitPrice = async (
         : null) ??
     (sources.localProductRow?.data?.[priceColumnKey] != null ? parsePriceValue(sources.localProductRow.data[priceColumnKey]) : null);
 
-  if (direct != null) return direct;
+  if (direct != null) {
+    if (fxRate && !hasFxOriginal) {
+      const converted = Number((direct * fxRate).toFixed(2));
+      return Number.isFinite(converted) ? converted : direct;
+    }
+    return direct;
+  }
 
-  if (priceColumnKey === "price" || priceColumnKey === mappingConfig.price_primary_key) {
+  if (priceColumnKey === "price" || priceColumnKey === primaryKey) {
     return primaryFallback;
   }
 
   const baseDirect = resolveBaseValue(priceColumnKey, product, sources);
-  if (baseDirect != null) return baseDirect;
+  if (baseDirect != null) {
+    if (fxRate && !hasFxOriginal) {
+      const converted = Number((baseDirect * fxRate).toFixed(2));
+      return Number.isFinite(converted) ? converted : baseDirect;
+    }
+    return baseDirect;
+  }
 
-  if (!mappingConfig.custom_columns?.[priceColumnKey]) return primaryFallback;
+  if (!mappingConfig?.custom_columns?.[priceColumnKey]) return primaryFallback;
 
   const resolveCustomColumnPrice = async (columnKey: string, depth = 0): Promise<number | null> => {
     if (depth > 8) return null;

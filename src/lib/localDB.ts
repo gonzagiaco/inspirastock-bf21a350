@@ -930,7 +930,6 @@ async function updateLocalRecordId(tableName: string, tempId: string, realId: st
 const BATCH_UPDATE_TABLES = new Set<string>([
   "dynamic_products_index",
   "dynamic_products",
-  "my_stock_products",
   "request_items",
   "stock_items",
 ]);
@@ -957,6 +956,67 @@ function chunkArray<T>(items: T[], size: number): T[][] {
     chunks.push(items.slice(i, i + size));
   }
   return chunks;
+}
+
+async function buildMyStockUpsertRow(op: PendingOperation): Promise<MyStockProductDB | null> {
+  const fallback = op.data && op.data.user_id && op.data.product_id ? op.data : null;
+  const localRow = await localDB.my_stock_products.get(op.record_id);
+  const base = localRow ?? fallback;
+
+  if (!base?.user_id || !base?.product_id) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const merged: MyStockProductDB = {
+    ...base,
+    ...op.data,
+    created_at: base.created_at ?? now,
+    updated_at: op.data?.updated_at ?? base.updated_at ?? now,
+  };
+
+  delete (merged as any).id;
+  return merged;
+}
+
+async function executeMyStockBatchUpserts(
+  ops: PendingOperation[],
+): Promise<{ successCount: number; errorCount: number }> {
+  let successCount = 0;
+  let errorCount = 0;
+
+  const rowsWithOps: Array<{ op: PendingOperation; row: MyStockProductDB }> = [];
+
+  for (const op of ops) {
+    const row = await buildMyStockUpsertRow(op);
+    if (!row) {
+      errorCount += 1;
+      await registerBatchFailure([op], new Error("Missing local my_stock_products data"));
+      continue;
+    }
+    rowsWithOps.push({ op, row });
+  }
+
+  const chunks = chunkArray(rowsWithOps, BATCH_SIZE);
+  for (const chunk of chunks) {
+    const rows = chunk.map(({ row }) => row);
+    const { error } = await supabase.from("my_stock_products").upsert(rows, {
+      onConflict: "user_id,product_id",
+    });
+    if (error) {
+      errorCount += chunk.length;
+      await registerBatchFailure(chunk.map((item) => item.op), error);
+      continue;
+    }
+
+    for (const item of chunk) {
+      await localDB.pending_operations.delete(item.op.id!);
+      await clearStockCompensation(item.op.id!);
+    }
+    successCount += chunk.length;
+  }
+
+  return { successCount, errorCount };
 }
 
 async function registerBatchFailure(ops: PendingOperation[], error: any): Promise<void> {
@@ -1084,8 +1144,14 @@ export async function syncPendingOperations(): Promise<void> {
     const sequentialOps: PendingOperation[] = [];
     const batchUpdateOps: BatchOperation[] = [];
     const batchDeleteOps: BatchOperation[] = [];
+    const myStockUpsertOps: PendingOperation[] = [];
 
     for (const op of sortedOps) {
+      if (op.table_name === "my_stock_products" && (op.operation_type === "INSERT" || op.operation_type === "UPDATE")) {
+        myStockUpsertOps.push(op);
+        continue;
+      }
+
       if (
         op.operation_type === "UPDATE" &&
         BATCH_UPDATE_TABLES.has(op.table_name) &&
@@ -1165,6 +1231,11 @@ export async function syncPendingOperations(): Promise<void> {
           }
         }
       }
+    }
+    if (myStockUpsertOps.length > 0) {
+      const myStockResult = await executeMyStockBatchUpserts(myStockUpsertOps);
+      successCount += myStockResult.successCount;
+      errorCount += myStockResult.errorCount;
     }
     if (batchUpdateOps.length > 0) {
       const batchUpdateResult = await executeBatchUpdates(batchUpdateOps);

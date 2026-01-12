@@ -1,4 +1,4 @@
-﻿import React from "react";
+﻿import React, { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -29,6 +29,13 @@ export const QuantityCell: React.FC<Props> = ({
   const queryClient = useQueryClient();
   const isOnline = useOnlineStatus();
   const current = Number(value ?? 0);
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(() => String(current));
+
+  useEffect(() => {
+    if (isEditing) return;
+    setDraft(String(current));
+  }, [current, isEditing]);
 
   const handleCommit = async (raw: string) => {
     const newQty = Number(raw);
@@ -100,7 +107,7 @@ export const QuantityCell: React.FC<Props> = ({
   const onKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (e) => {
     if (e.key === "Enter") (e.target as HTMLInputElement).blur();
     if (e.key === "Escape") {
-      (e.target as HTMLInputElement).value = String(current);
+      setDraft(String(current));
       (e.target as HTMLInputElement).blur();
     }
   };
@@ -110,8 +117,13 @@ export const QuantityCell: React.FC<Props> = ({
     <input
       type="number"
       className="h-8 w-20 lg-1160:w-16  bg-black border rounded px-2"
-      defaultValue={current}
-      onBlur={(e) => { void handleCommit(e.target.value); }}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onFocus={() => setIsEditing(true)}
+      onBlur={(e) => {
+        setIsEditing(false);
+        void handleCommit(e.target.value);
+      }}
       onKeyDown={onKeyDown}
     />
     

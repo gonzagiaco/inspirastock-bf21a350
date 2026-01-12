@@ -14,7 +14,8 @@ import { useDeliveryClients } from "@/hooks/useDeliveryClients";
 import DeliveryNoteProductSearch from "./DeliveryNoteProductSearch";
 import { ChevronLeft, X, Plus, Minus, Loader2 } from "lucide-react";
 import { formatARS } from "@/utils/numberParser";
-import { applyPercentageAdjustment } from "@/utils/deliveryNotePricing";
+import { applyPercentageAdjustment, resolveDeliveryNoteUnitPrice } from "@/utils/deliveryNotePricing";
+import { onDeliveryNotePricesUpdated } from "@/utils/deliveryNoteEvents";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { localDB } from "@/lib/localDB";
@@ -193,6 +194,118 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
     const row = await localDB.dynamic_products_index.where("code").equals(normalized).first();
     return row?.product_id ? String(row.product_id) : null;
   };
+
+  const refreshItemPrices = async (detail: { listId?: string; productIds?: string[] }) => {
+    const currentItems = itemsRef.current;
+    if (!open || currentItems.length === 0) return;
+
+    const listIdFilter = detail.listId ? String(detail.listId) : null;
+    const productIdSet =
+      detail.productIds && detail.productIds.length > 0
+        ? new Set(detail.productIds.map((id) => String(id)))
+        : null;
+
+    const candidates = currentItems.filter((item) => Boolean(item.productId));
+    if (!candidates.length) return;
+
+    const filteredByIds = productIdSet
+      ? candidates.filter((item) => item.productId && productIdSet.has(String(item.productId)))
+      : candidates;
+    if (!filteredByIds.length) return;
+
+    const productIds = Array.from(new Set(filteredByIds.map((item) => String(item.productId))));
+    const chunks: string[][] = [];
+    for (let i = 0; i < productIds.length; i += 500) {
+      chunks.push(productIds.slice(i, i + 500));
+    }
+
+    const indexMap = new Map<string, any>();
+    const productMap = new Map<string, any>();
+
+    const loadFromLocal = async () => {
+      const [indexRows, productRows] = await Promise.all([
+        localDB.dynamic_products_index.where("product_id").anyOf(productIds).toArray(),
+        localDB.dynamic_products.where("id").anyOf(productIds).toArray(),
+      ]);
+      indexRows.forEach((row) => indexMap.set(String(row.product_id), row));
+      productRows.forEach((row) => productMap.set(String(row.id), row));
+    };
+
+    if (isOnline) {
+      try {
+        for (const chunk of chunks) {
+          const [indexResult, productResult] = await Promise.all([
+            supabase
+              .from("dynamic_products_index")
+              .select("product_id, list_id, price, calculated_data")
+              .in("product_id", chunk),
+            supabase
+              .from("dynamic_products")
+              .select("id, list_id, price, data")
+              .in("id", chunk),
+          ]);
+          if (indexResult.error) throw indexResult.error;
+          if (productResult.error) throw productResult.error;
+          (indexResult.data || []).forEach((row) => indexMap.set(String(row.product_id), row));
+          (productResult.data || []).forEach((row) => productMap.set(String(row.id), row));
+        }
+      } catch (error) {
+        console.error("refreshItemPrices (online) error:", error);
+        await loadFromLocal();
+      }
+    } else {
+      await loadFromLocal();
+    }
+
+    const nextItems = await Promise.all(
+      currentItems.map(async (item) => {
+        if (!item.productId) return item;
+        if (productIdSet && !productIdSet.has(String(item.productId))) return item;
+
+        const indexRow = indexMap.get(String(item.productId));
+        const productRow = productMap.get(String(item.productId));
+        if (!indexRow && !productRow) return item;
+
+        if (listIdFilter) {
+          const itemListId = item.productListId != null ? String(item.productListId) : "";
+          const indexListId = indexRow?.list_id != null ? String(indexRow.list_id) : "";
+          const productListId = productRow?.list_id != null ? String(productRow.list_id) : "";
+          const matchesList =
+            (itemListId && itemListId === listIdFilter) ||
+            (indexListId && indexListId === listIdFilter) ||
+            (productListId && productListId === listIdFilter);
+          if (!matchesList) return item;
+        }
+
+        const mappingConfig = item.productListId ? mappingConfigByListId.get(String(item.productListId)) : undefined;
+        const priceKey = item.priceColumnKeyUsed?.trim()
+          ? item.priceColumnKeyUsed
+          : getEffectivePriceColumn(item.productListId);
+
+        const baseUnitPrice = await resolveDeliveryNoteUnitPrice(
+          priceKey,
+          mappingConfig,
+          productRow ?? indexRow ?? {},
+          { indexRow, localProductRow: productRow },
+        );
+
+        if (baseUnitPrice == null || samePrice(baseUnitPrice, item.unitPrice)) return item;
+        return { ...item, unitPrice: baseUnitPrice };
+      }),
+    );
+
+    const hasChanges = nextItems.some((nextItem, index) => nextItem !== currentItems[index]);
+    if (hasChanges) {
+      setItems(nextItems);
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    return onDeliveryNotePricesUpdated((detail) => {
+      void refreshItemPrices(detail);
+    });
+  }, [open, refreshItemPrices]);
 
   // Removed: resolveCurrentUnitPrice - no longer needed since we use column-based detection (isOldPriceItem)
 
@@ -712,7 +825,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
               <div className="flex-1">
                 <p className="font-medium">{item.productName}</p>
                 <p className="text-sm text-muted-foreground">
-                  C?digo: {item.productCode} | {formatARS(adjustedUnitPrice)} c/u
+                  Código: {item.productCode} | {formatARS(adjustedUnitPrice)} c/u
                 </p>
               </div>
               <div className="flex items-center gap-2">
