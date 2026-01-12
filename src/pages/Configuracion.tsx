@@ -8,7 +8,7 @@ const Configuracion = () => {
   const { autoAddLowStockToCart, setAutoAddLowStockToCart } = useConfigStore();
 
   return (
-    <div className="flex-1 p-4 lg:px-4 lg:py-10">
+    <div className="flex-1 p-4 pt-11 lg:px-4 lg:py-10">
       <Header
         title="Configuración"
         subtitle="Ajustá las preferencias de la aplicación"
