@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import { useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { SupplierListsView } from "@/components/suppliers/SupplierListsView";
 import { ListConfigurationView } from "@/components/suppliers/ListConfigurationView";
 import { OfflineActionDialog } from "@/components/OfflineActionDialog";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { useNavigationBlock } from "@/hooks/useNavigationBlock";
 
 type ViewState = 
   | { type: 'suppliers' }
@@ -28,12 +29,31 @@ const Proveedores = () => {
   const [supplierToDelete, setSupplierToDelete] = useState<Supplier | null>(null);
   const [showOfflineWarning, setShowOfflineWarning] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const [shakeKey, setShakeKey] = useState(0);
 
   const { suppliers, isLoading: isLoadingSuppliers, createSupplier, updateSupplier, deleteSupplier } = useSuppliers();
   const { data: lists = [] } = useProductListsIndex();
   const location = useLocation();
   const isOnline = useOnlineStatus();
+  const { setBlocked, clearBlock } = useNavigationBlock();
+
+  // Trigger shake and warning when navigation is blocked
+  const handleBlockedNavigation = useCallback(() => {
+    setShowUnsavedWarning(true);
+    setShakeKey(prev => prev + 1);
+  }, []);
+
+  // Register/unregister navigation block based on unsaved changes
+  useEffect(() => {
+    if (currentView.type === 'list-config' && hasUnsavedChanges) {
+      setBlocked(true, handleBlockedNavigation);
+    } else {
+      setShowUnsavedWarning(false);
+      clearBlock();
+    }
+    return () => clearBlock();
+  }, [currentView.type, hasUnsavedChanges, setBlocked, clearBlock, handleBlockedNavigation]);
 
   const handleCreateSupplier = () => {
     setSelectedSupplier(null);
@@ -111,11 +131,7 @@ const Proveedores = () => {
 
   const handleBack = () => {
     if (currentView.type === 'list-config') {
-      if (hasUnsavedChanges) {
-        // Trigger shake animation
-        setShakeKey(prev => prev + 1);
-        return;
-      }
+      // Navigation block is handled by the hook, this is only called when not blocked
       setCurrentView({ type: 'supplier-lists', supplier: currentView.supplier });
     } else if (currentView.type === 'supplier-lists') {
       setCurrentView({ type: 'suppliers' });
@@ -124,9 +140,15 @@ const Proveedores = () => {
 
   const handleConfigSaved = () => {
     setHasUnsavedChanges(false);
+    setShowUnsavedWarning(false);
     if (currentView.type === 'list-config') {
       setCurrentView({ type: 'supplier-lists', supplier: currentView.supplier });
     }
+  };
+
+  const handleResetChanges = () => {
+    setHasUnsavedChanges(false);
+    setShowUnsavedWarning(false);
   };
 
   const getProductCount = (supplierId: string) => {
@@ -263,7 +285,7 @@ const Proveedores = () => {
           <div 
             key={shakeKey}
             className={`flex-1 flex flex-col glassmorphism rounded-xl overflow-hidden transition-colors duration-300 ${
-              hasUnsavedChanges 
+              showUnsavedWarning 
                 ? 'border-2 border-destructive animate-shake' 
                 : 'border border-primary/20'
             }`}
@@ -272,6 +294,8 @@ const Proveedores = () => {
               listId={currentView.listId}
               onSaved={handleConfigSaved}
               onHasUnsavedChanges={setHasUnsavedChanges}
+              onReset={handleResetChanges}
+              showWarning={showUnsavedWarning}
             />
           </div>
         )}
