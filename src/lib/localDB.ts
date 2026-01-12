@@ -943,6 +943,7 @@ const BATCH_DELETE_TABLES = new Set<string>([
 ]);
 
 const BATCH_SIZE = 200;
+let syncFailureSummary: Map<string, number> | null = null;
 
 type BatchOperation = {
   op: PendingOperation;
@@ -956,6 +957,21 @@ function chunkArray<T>(items: T[], size: number): T[][] {
     chunks.push(items.slice(i, i + size));
   }
   return chunks;
+}
+
+function resetSyncFailureSummary(): void {
+  syncFailureSummary = new Map<string, number>();
+}
+
+function recordSyncFailure(tableName: string): void {
+  if (!syncFailureSummary) return;
+  syncFailureSummary.set(tableName, (syncFailureSummary.get(tableName) ?? 0) + 1);
+}
+
+function buildSyncFailureToast(): string | null {
+  if (!syncFailureSummary || syncFailureSummary.size === 0) return null;
+  const parts = Array.from(syncFailureSummary.entries()).map(([table, count]) => `${table}: ${count}`);
+  return `Operaciones fallidas (descartadas): ${parts.join(", ")}`;
 }
 
 async function buildMyStockUpsertRow(op: PendingOperation): Promise<MyStockProductDB | null> {
@@ -976,6 +992,54 @@ async function buildMyStockUpsertRow(op: PendingOperation): Promise<MyStockProdu
   };
 
   delete (merged as any).id;
+  return merged;
+}
+
+async function buildDynamicProductsUpsertRow(
+  op: PendingOperation,
+  realId: string,
+): Promise<DynamicProductDB | null> {
+  const localRow = await localDB.dynamic_products.get(realId);
+  const base = localRow ?? op.data;
+
+  if (!base?.user_id || !base?.list_id) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const merged: DynamicProductDB = {
+    ...base,
+    ...op.data,
+    id: realId,
+    data: op.data?.data ?? base.data ?? {},
+    created_at: base.created_at ?? now,
+    updated_at: op.data?.updated_at ?? base.updated_at ?? now,
+  };
+
+  return merged;
+}
+
+async function buildDynamicProductsIndexUpsertRow(
+  op: PendingOperation,
+  realId: string,
+): Promise<DynamicProductIndexDB | null> {
+  const localRow = await localDB.dynamic_products_index.get(realId);
+  const base = localRow ?? op.data;
+
+  if (!base?.user_id || !base?.list_id || !base?.product_id) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const merged: DynamicProductIndexDB = {
+    ...base,
+    ...op.data,
+    id: realId,
+    in_my_stock: op.data?.in_my_stock ?? base.in_my_stock ?? false,
+    created_at: base.created_at ?? now,
+    updated_at: op.data?.updated_at ?? base.updated_at ?? now,
+  };
+
   return merged;
 }
 
@@ -1035,7 +1099,7 @@ async function registerBatchFailure(ops: PendingOperation[], error: any): Promis
     if (newRetryCount >= 3) {
       await rollbackStockCompensation(op.id!);
       await localDB.pending_operations.delete(op.id!);
-      toast.error(`Operacion fallida: ${op.table_name}`);
+      recordSyncFailure(op.table_name);
     }
   }
 }
@@ -1052,9 +1116,54 @@ async function executeBatchUpdates(ops: BatchOperation[]): Promise<{ successCoun
     byTable.get(item.op.table_name)!.push(item);
   }
 
-  for (const [table, tableOps] of byTable.entries()) {
+  const orderedTables: string[] = [];
+  const priorityTables = ["dynamic_products", "dynamic_products_index"];
+  for (const table of priorityTables) {
+    if (byTable.has(table)) orderedTables.push(table);
+  }
+  for (const table of byTable.keys()) {
+    if (!priorityTables.includes(table)) orderedTables.push(table);
+  }
+
+  for (const table of orderedTables) {
+    const tableOps = byTable.get(table) ?? [];
+    if (tableOps.length === 0) continue;
     const chunks = chunkArray(tableOps, BATCH_SIZE);
     for (const chunk of chunks) {
+      if (table === "dynamic_products" || table === "dynamic_products_index") {
+        const rowsWithOps: Array<{ op: PendingOperation; row: any }> = [];
+        for (const { op, realId } of chunk) {
+          const row =
+            table === "dynamic_products"
+              ? await buildDynamicProductsUpsertRow(op, realId)
+              : await buildDynamicProductsIndexUpsertRow(op, realId);
+
+          if (!row) {
+            errorCount += 1;
+            await registerBatchFailure([op], new Error(`Missing local ${table} data`));
+            continue;
+          }
+          rowsWithOps.push({ op, row });
+        }
+
+        if (rowsWithOps.length === 0) continue;
+
+        const rows = rowsWithOps.map(({ row }) => row);
+        const { error } = await supabase.from(table as any).upsert(rows, { onConflict: "id" });
+        if (error) {
+          errorCount += rowsWithOps.length;
+          await registerBatchFailure(rowsWithOps.map((item) => item.op), error);
+          continue;
+        }
+
+        for (const item of rowsWithOps) {
+          await localDB.pending_operations.delete(item.op.id!);
+          await clearStockCompensation(item.op.id!);
+        }
+        successCount += rowsWithOps.length;
+        continue;
+      }
+
       const rows = chunk.map(({ op, realId }) => ({ ...op.data, id: realId }));
       const { error } = await supabase.from(table as any).upsert(rows, { onConflict: "id" });
       if (error) {
@@ -1124,6 +1233,7 @@ export async function syncPendingOperations(): Promise<void> {
   isSyncInProgress = true;
 
   try {
+    resetSyncFailureSummary();
     const operations = await localDB.pending_operations.toArray();
 
     if (operations.length === 0) {
@@ -1226,8 +1336,7 @@ export async function syncPendingOperations(): Promise<void> {
             }
 
             await localDB.pending_operations.delete(op.id!);
-            // Solo mostrar toast de error crÃ­tico
-            toast.error(`OperaciÃ³n fallida: ${op.table_name}`);
+            recordSyncFailure(op.table_name);
           }
         }
       }
@@ -1259,9 +1368,9 @@ export async function syncPendingOperations(): Promise<void> {
       return;
     }
 
-    // Mostrar solo errores para evitar ruido en la UI
-    if (errorCount > 0 && successCount === 0) {
-      toast.error(`${errorCount} operaciones fallaron`);
+    const failureToast = buildSyncFailureToast();
+    if (failureToast) {
+      toast.error(failureToast);
     }
   } finally {
     isSyncInProgress = false;
