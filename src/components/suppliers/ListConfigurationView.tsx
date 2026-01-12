@@ -1,9 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Loader2, Columns, Settings2, Tags } from "lucide-react";
+import { Loader2, Columns, Settings2, Tags, AlertTriangle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { localDB, isOnline, queueOperation, syncProductListById } from "@/lib/localDB";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -43,9 +43,10 @@ export type MappingConfig = {
 interface ListConfigurationViewProps {
   listId: string;
   onSaved?: () => void;
+  onHasUnsavedChanges?: (hasChanges: boolean) => void;
 }
 
-export function ListConfigurationView({ listId, onSaved }: ListConfigurationViewProps) {
+export function ListConfigurationView({ listId, onSaved, onHasUnsavedChanges }: ListConfigurationViewProps) {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
 
@@ -55,6 +56,7 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [activeTab, setActiveTab] = useState("columns");
+  const [initialMap, setInitialMap] = useState<MappingConfig | null>(null);
   const [map, setMap] = useState<MappingConfig>({
     code_keys: [],
     name_keys: [],
@@ -93,6 +95,16 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
     return numericCount > 0 && numericCount >= sample.length * 0.5;
   };
 
+  // Detect unsaved changes
+  const hasUnsavedChanges = useMemo(() => {
+    if (!initialMap) return false;
+    return JSON.stringify(map) !== JSON.stringify(initialMap);
+  }, [map, initialMap]);
+
+  useEffect(() => {
+    onHasUnsavedChanges?.(hasUnsavedChanges);
+  }, [hasUnsavedChanges, onHasUnsavedChanges]);
+
   useEffect(() => {
     let isCancelled = false;
 
@@ -126,9 +138,16 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
           
           setKeys(Array.from(k).sort());
           
-          setMap((prev) => ({
-            ...prev,
-            ...loaded,
+          const loadedMap: MappingConfig = {
+            code_keys: loaded.code_keys || [],
+            name_keys: loaded.name_keys || [],
+            quantity_key: loaded.quantity_key || null,
+            price_primary_key: loaded.price_primary_key || null,
+            price_alt_keys: loaded.price_alt_keys || [],
+            extra_index_keys: loaded.extra_index_keys || [],
+            low_stock_threshold: loaded.low_stock_threshold || 0,
+            cart_price_column: loaded.cart_price_column || null,
+            delivery_note_price_column: loaded.delivery_note_price_column || null,
             price_modifiers: {
               general: { percentage: 0, add_vat: false, vat_rate: 21 },
               overrides: {},
@@ -138,9 +157,31 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
               target_columns: loaded.dollar_conversion?.target_columns || [],
             },
             custom_columns: loaded.custom_columns || undefined,
-          }));
+          };
+          
+          setMap(loadedMap);
+          setInitialMap(loadedMap);
         } else {
           setKeys(Array.from(k).sort());
+          const defaultMap: MappingConfig = {
+            code_keys: [],
+            name_keys: [],
+            quantity_key: null,
+            price_primary_key: null,
+            price_alt_keys: [],
+            extra_index_keys: [],
+            low_stock_threshold: 0,
+            cart_price_column: null,
+            delivery_note_price_column: null,
+            price_modifiers: {
+              general: { percentage: 0, add_vat: false, vat_rate: 21 },
+              overrides: {},
+            },
+            dollar_conversion: {
+              target_columns: [],
+            },
+          };
+          setInitialMap(defaultMap);
         }
       } catch (error) {
         console.error("Error loading sample or mapping_config:", error);
@@ -358,16 +399,26 @@ export function ListConfigurationView({ listId, onSaved }: ListConfigurationView
 
       {/* Fixed footer with save button */}
       <div className="border-t bg-background/95 backdrop-blur-sm p-4 sticky bottom-0">
-        <Button onClick={handleSave} disabled={isSaving} className="w-full md:w-auto md:float-right">
-          {isSaving ? (
-            <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              Guardando...
-            </>
-          ) : (
-            "Guardar configuración"
+        <div className="flex flex-col-reverse md:flex-row md:items-center md:justify-end gap-3">
+          {hasUnsavedChanges && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[hsl(0,60%,25%)] animate-shake">
+              <AlertTriangle className="w-4 h-4 text-white shrink-0" />
+              <span className="text-white text-sm font-medium">
+                ¡Cuidado! Tienes cambios sin guardar.
+              </span>
+            </div>
           )}
-        </Button>
+          <Button onClick={handleSave} disabled={isSaving} className="w-full md:w-auto">
+            {isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Guardando...
+              </>
+            ) : (
+              "Guardar configuración"
+            )}
+          </Button>
+        </div>
       </div>
     </div>
   );
