@@ -687,6 +687,22 @@ export async function queueOperation(
   console.log(`ðŸ“ OperaciÃ³n encolada: ${operationType} en ${tableName}`);
 }
 
+const PENDING_OPS_BATCH_SIZE = 500;
+
+async function bulkAddPendingOperations(ops: PendingOperation[]): Promise<void> {
+  if (!ops.length) return;
+  for (let i = 0; i < ops.length; i += PENDING_OPS_BATCH_SIZE) {
+    await localDB.pending_operations.bulkAdd(ops.slice(i, i + PENDING_OPS_BATCH_SIZE));
+  }
+}
+
+async function bulkDeletePendingOperations(ids: number[]): Promise<void> {
+  if (!ids.length) return;
+  for (let i = 0; i < ids.length; i += PENDING_OPS_BATCH_SIZE) {
+    await localDB.pending_operations.bulkDelete(ids.slice(i, i + PENDING_OPS_BATCH_SIZE));
+  }
+}
+
 export async function queueOperationsBulk(
   operations: Array<{
     tableName: string;
@@ -705,7 +721,7 @@ export async function queueOperationsBulk(
     timestamp: now + index,
     retry_count: 0,
   }));
-  await localDB.pending_operations.bulkAdd(bulkOps);
+  await bulkAddPendingOperations(bulkOps);
   console.log(`ÐY"? Operaciones encoladas en lote: ${bulkOps.length}`);
 }
 
@@ -830,11 +846,11 @@ async function compactPendingOperations(operations: PendingOperation[]): Promise
   }
 
   if (idsToDelete.length > 0) {
-    await localDB.pending_operations.bulkDelete(idsToDelete);
+    await bulkDeletePendingOperations(idsToDelete);
   }
 
   if (opsToAdd.length > 0) {
-    await localDB.pending_operations.bulkAdd(opsToAdd);
+    await bulkAddPendingOperations(opsToAdd);
   }
 
   if (mergedCount > 0 || droppedCount > 0) {
