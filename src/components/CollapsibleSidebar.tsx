@@ -413,7 +413,7 @@ const CollapsibleSidebar = () => {
               </div>
             </div>
           )}
-          <div className={`glassmorphism rounded-xl ${isCollapsed ? "p-2" : "p-4"}`}>
+          <div className={`glassmorphism rounded-xl ${isCollapsed ? "p-2" : "p-4 lg:p-4 p-3"}`}>
             {isCollapsed ? (
               <div className="relative">
                 {/* Avatar centrado y clickeable */}
@@ -447,19 +447,19 @@ const CollapsibleSidebar = () => {
               </div>
             ) : (
               <>
-                <div className="flex items-center gap-3 mb-3">
-                  <Avatar>
-                    <AvatarFallback className="bg-primary/20 text-primary">{getUserInitials()}</AvatarFallback>
+                <div className="flex items-center gap-2 lg:gap-3 mb-2 lg:mb-3">
+                  <Avatar className="h-8 w-8 lg:h-10 lg:w-10">
+                    <AvatarFallback className="bg-primary/20 text-primary text-xs lg:text-sm">{getUserInitials()}</AvatarFallback>
                   </Avatar>
                   <div className="flex-1 overflow-hidden">
-                    <p className="text-sm font-medium text-foreground truncate">
+                    <p className="text-xs lg:text-sm font-medium text-foreground truncate">
                       {user?.user_metadata?.full_name || user?.email}
                     </p>
-                    <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
+                    <p className="text-[10px] lg:text-xs text-muted-foreground truncate">{user?.email}</p>
                   </div>
                 </div>
-                <Button variant="outline" size="sm" className="w-full" onClick={signOut}>
-                  <LogOut className="h-4 w-4 mr-2" />
+                <Button variant="outline" size="sm" className="w-full text-xs lg:text-sm h-8 lg:h-9" onClick={signOut}>
+                  <LogOut className="h-3 w-3 lg:h-4 lg:w-4 mr-1 lg:mr-2" />
                   Cerrar Sesión
                 </Button>
               </>
