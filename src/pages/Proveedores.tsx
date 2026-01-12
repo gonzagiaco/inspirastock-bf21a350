@@ -27,6 +27,8 @@ const Proveedores = () => {
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
   const [supplierToDelete, setSupplierToDelete] = useState<Supplier | null>(null);
   const [showOfflineWarning, setShowOfflineWarning] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [shakeKey, setShakeKey] = useState(0);
 
   const { suppliers, isLoading: isLoadingSuppliers, createSupplier, updateSupplier, deleteSupplier } = useSuppliers();
   const { data: lists = [] } = useProductListsIndex();
@@ -109,9 +111,21 @@ const Proveedores = () => {
 
   const handleBack = () => {
     if (currentView.type === 'list-config') {
+      if (hasUnsavedChanges) {
+        // Trigger shake animation
+        setShakeKey(prev => prev + 1);
+        return;
+      }
       setCurrentView({ type: 'supplier-lists', supplier: currentView.supplier });
     } else if (currentView.type === 'supplier-lists') {
       setCurrentView({ type: 'suppliers' });
+    }
+  };
+
+  const handleConfigSaved = () => {
+    setHasUnsavedChanges(false);
+    if (currentView.type === 'list-config') {
+      setCurrentView({ type: 'supplier-lists', supplier: currentView.supplier });
     }
   };
 
@@ -246,10 +260,18 @@ const Proveedores = () => {
         )}
 
         {currentView.type === 'list-config' && (
-          <div className="flex-1 flex flex-col glassmorphism rounded-xl border border-primary/20 overflow-hidden">
+          <div 
+            key={shakeKey}
+            className={`flex-1 flex flex-col glassmorphism rounded-xl overflow-hidden transition-colors duration-300 ${
+              hasUnsavedChanges 
+                ? 'border-2 border-destructive animate-shake' 
+                : 'border border-primary/20'
+            }`}
+          >
             <ListConfigurationView
               listId={currentView.listId}
-              onSaved={handleBack}
+              onSaved={handleConfigSaved}
+              onHasUnsavedChanges={setHasUnsavedChanges}
             />
           </div>
         )}
