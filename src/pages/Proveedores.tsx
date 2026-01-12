@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Header from "@/components/Header";
 import { useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,7 @@ const Proveedores = () => {
   const [showOfflineWarning, setShowOfflineWarning] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
-  const [shakeKey, setShakeKey] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const { suppliers, isLoading: isLoadingSuppliers, createSupplier, updateSupplier, deleteSupplier } = useSuppliers();
   const { data: lists = [] } = useProductListsIndex();
@@ -41,7 +41,13 @@ const Proveedores = () => {
   // Trigger shake and warning when navigation is blocked
   const handleBlockedNavigation = useCallback(() => {
     setShowUnsavedWarning(true);
-    setShakeKey(prev => prev + 1);
+    // Trigger shake animation by removing and re-adding the class
+    if (containerRef.current) {
+      containerRef.current.classList.remove('animate-shake');
+      // Force reflow to restart animation
+      void containerRef.current.offsetWidth;
+      containerRef.current.classList.add('animate-shake');
+    }
   }, []);
 
   // Register/unregister navigation block based on unsaved changes
@@ -283,10 +289,10 @@ const Proveedores = () => {
 
         {currentView.type === 'list-config' && (
           <div 
-            key={shakeKey}
+            ref={containerRef}
             className={`flex-1 flex flex-col glassmorphism rounded-xl overflow-hidden transition-colors duration-300 ${
               showUnsavedWarning 
-                ? 'border-2 border-destructive animate-shake' 
+                ? 'border-2 border-destructive' 
                 : 'border border-primary/20'
             }`}
           >
