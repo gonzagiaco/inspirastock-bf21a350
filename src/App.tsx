@@ -13,6 +13,7 @@ import MiStock from "./pages/MiStock";
 import Proveedores from "./pages/Proveedores";
 import Remitos from "./pages/Remitos";
 import Ayuda from "./pages/Ayuda";
+import Configuracion from "./pages/Configuracion";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 
@@ -80,6 +81,17 @@ const App = () => (
                   <div className="flex min-h-screen w-full safe-top">
                     <CollapsibleSidebar />
                     <Ayuda />
+                  </div>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/config"
+              element={
+                <ProtectedRoute>
+                  <div className="flex min-h-screen w-full safe-top">
+                    <CollapsibleSidebar />
+                    <Configuracion />
                   </div>
                 </ProtectedRoute>
               }

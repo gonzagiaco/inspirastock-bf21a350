@@ -12,6 +12,7 @@ import {
   CircleHelp,
   Package,
   RefreshCw,
+  Settings,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -90,6 +91,7 @@ const CollapsibleSidebar = () => {
     { name: "Proveedores", href: "/proveedores", icon: Warehouse },
     { name: "Remitos", href: "/remitos", icon: Receipt },
     { name: "Ayuda", href: "/ayuda", icon: CircleHelp },
+    { name: "Configuración", href: "/config", icon: Settings },
   ];
 
   const isActive = (path: string) => location.pathname === path;
