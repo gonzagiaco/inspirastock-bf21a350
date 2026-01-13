@@ -11,7 +11,7 @@ import { useSuppliers } from "@/hooks/useSuppliers";
 import { useProductListsIndex } from "@/hooks/useProductListsIndex";
 import { SupplierBreadcrumbs } from "@/components/suppliers/SupplierBreadcrumbs";
 import { SupplierListsView } from "@/components/suppliers/SupplierListsView";
-import { ListConfigurationView } from "@/components/suppliers/ListConfigurationView";
+import { ListConfigurationView, ListConfigurationViewHandle } from "@/components/suppliers/ListConfigurationView";
 import { OfflineActionDialog } from "@/components/OfflineActionDialog";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useNavigationBlock } from "@/hooks/useNavigationBlock";
@@ -31,6 +31,7 @@ const Proveedores = () => {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const listConfigRef = useRef<ListConfigurationViewHandle>(null);
 
   const { suppliers, isLoading: isLoadingSuppliers, createSupplier, updateSupplier, deleteSupplier } = useSuppliers();
   const { data: lists = [] } = useProductListsIndex();
@@ -309,6 +310,7 @@ const Proveedores = () => {
             }`}
           >
             <ListConfigurationView
+              ref={listConfigRef}
               listId={currentView.listId}
               onSaved={handleConfigSaved}
               onHasUnsavedChanges={setHasUnsavedChanges}
@@ -341,17 +343,30 @@ const Proveedores = () => {
         />
       </div>
 
-      {/* Floating warning snackbar - Google Drive style */}
+      {/* Floating warning snackbar - Google Drive style, always at top */}
       {showUnsavedWarning && (
         <div 
           ref={warningRef}
-          className="absolute top-4 left-0 right-0 z-50 flex justify-center pointer-events-none md:top-auto md:bottom-6"
+          className="absolute top-4 left-0 right-0 z-50 flex justify-center pointer-events-none"
         >
           <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[hsl(0,50%,20%)] shadow-lg border border-destructive/30 pointer-events-auto md:gap-2 md:px-4 md:py-3">
             <AlertTriangle className="w-4 h-4 text-white shrink-0 md:w-5 md:h-5" />
             <span className="text-white text-xs font-medium md:text-sm">
               ¡Cuidado! Cambios sin guardar
             </span>
+            <span className="mx-1 text-white/40 hidden md:inline">|</span>
+            <button
+              onClick={() => listConfigRef.current?.reset()}
+              className="text-white/80 hover:text-white text-xs md:text-sm underline underline-offset-2 transition-colors"
+            >
+              Restablecer
+            </button>
+            <button
+              onClick={() => listConfigRef.current?.save()}
+              className="text-white font-semibold text-xs md:text-sm underline underline-offset-2 transition-colors hover:text-white/90"
+            >
+              Guardar
+            </button>
           </div>
         </div>
       )}
