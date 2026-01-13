@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, forwardRef, useImperativeHandle } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -40,6 +40,11 @@ export type MappingConfig = {
   custom_columns?: Record<string, CustomColumnFormula>;
 };
 
+export interface ListConfigurationViewHandle {
+  save: () => void;
+  reset: () => void;
+}
+
 interface ListConfigurationViewProps {
   listId: string;
   onSaved?: () => void;
@@ -48,7 +53,8 @@ interface ListConfigurationViewProps {
   showWarning?: boolean;
 }
 
-export function ListConfigurationView({ listId, onSaved, onHasUnsavedChanges, onReset, showWarning }: ListConfigurationViewProps) {
+export const ListConfigurationView = forwardRef<ListConfigurationViewHandle, ListConfigurationViewProps>(
+  function ListConfigurationView({ listId, onSaved, onHasUnsavedChanges, onReset, showWarning }, ref) {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
 
@@ -76,6 +82,7 @@ export function ListConfigurationView({ listId, onSaved, onHasUnsavedChanges, on
       target_columns: [],
     },
   });
+
 
   const isNumericColumn = (columnKey: string): boolean => {
     const schemaType = columnSchema.find((col) => col.key === columnKey)?.type;
@@ -328,6 +335,17 @@ export function ListConfigurationView({ listId, onSaved, onHasUnsavedChanges, on
     }
   };
 
+  // Expose save and reset methods to parent via ref
+  useImperativeHandle(ref, () => ({
+    save: () => handleSave(),
+    reset: () => {
+      if (initialMap) {
+        setMap(initialMap);
+        onReset?.();
+      }
+    }
+  }), [initialMap, onReset, handleSave]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -436,4 +454,4 @@ export function ListConfigurationView({ listId, onSaved, onHasUnsavedChanges, on
       </div>
     </div>
   );
-}
+});
