@@ -345,23 +345,23 @@ const Proveedores = () => {
       {showUnsavedWarning && (
         <div 
           ref={warningRef}
-          className="absolute top-4 left-0 right-0 z-50 flex justify-center pointer-events-none"
+          className="absolute top-4 left-2 right-2 md:left-0 md:right-0 z-50 flex justify-center pointer-events-none"
         >
-          <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[hsl(0,50%,20%)] shadow-lg border border-destructive/30 pointer-events-auto md:gap-2 md:px-4 md:py-3">
+          <div className="w-full md:w-auto flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[hsl(0,50%,20%)] shadow-lg border border-destructive/30 pointer-events-auto md:px-4 md:py-3">
             <AlertTriangle className="w-4 h-4 text-white shrink-0 md:w-5 md:h-5" />
-            <span className="text-white text-xs font-medium md:text-sm">
+            <span className="text-white text-xs font-medium md:text-sm whitespace-nowrap">
               ¡Cuidado! Cambios sin guardar
             </span>
-            <span className="mx-1 text-white/40 hidden md:inline">|</span>
+            <span className="mx-1 text-white/40">|</span>
             <button
               onClick={() => listConfigRef.current?.reset()}
-              className="text-white/80 hover:text-white text-xs md:text-sm underline underline-offset-2 transition-colors"
+              className="text-white/80 hover:text-white text-xs md:text-sm underline underline-offset-2 transition-colors whitespace-nowrap"
             >
               Restablecer
             </button>
             <button
               onClick={() => listConfigRef.current?.save()}
-              className="text-white font-semibold text-xs md:text-sm underline underline-offset-2 transition-colors hover:text-white/90"
+              className="text-white font-semibold text-xs md:text-sm underline underline-offset-2 transition-colors hover:text-white/90 whitespace-nowrap"
             >
               Guardar
             </button>
