@@ -399,11 +399,13 @@ export function ListConfigurationView({ listId, onSaved, onHasUnsavedChanges, on
         </div>
       </Tabs>
 
-      <div className="border-t bg-background/95 backdrop-blur-sm p-4 sticky bottom-0">
-        <div className="flex items-center justify-end gap-3">
+      <div className="border-t bg-background/95 backdrop-blur-sm p-3 md:p-4 sticky bottom-0">
+        <div className="flex items-center justify-end gap-2 md:gap-3">
           {hasUnsavedChanges && (
             <Button 
-              variant="outline" 
+              variant="outline"
+              size="sm"
+              className="text-xs px-2 py-1 h-8 md:text-sm md:px-4 md:py-2 md:h-10"
               onClick={() => {
                 if (initialMap) {
                   setMap(initialMap);
@@ -411,18 +413,23 @@ export function ListConfigurationView({ listId, onSaved, onHasUnsavedChanges, on
                 }
               }} 
             >
-              <RotateCcw className="w-4 h-4 mr-2" />
+              <RotateCcw className="w-3.5 h-3.5 mr-1.5 md:w-4 md:h-4 md:mr-2" />
               Restablecer
             </Button>
           )}
-          <Button onClick={handleSave} disabled={isSaving}>
+          <Button 
+            onClick={handleSave} 
+            disabled={isSaving}
+            size="sm"
+            className="text-xs px-2 py-1 h-8 md:text-sm md:px-4 md:py-2 md:h-10"
+          >
             {isSaving ? (
               <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 md:w-4 md:h-4 md:mr-2 animate-spin" />
                 Guardando...
               </>
             ) : (
-              "Guardar configuración"
+              "Guardar"
             )}
           </Button>
         </div>

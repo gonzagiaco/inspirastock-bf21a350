@@ -42,8 +42,6 @@ const Proveedores = () => {
 
   // Trigger shake and warning when navigation is blocked
   const handleBlockedNavigation = useCallback(() => {
-    setShowUnsavedWarning(true);
-    // Trigger shake animation on both container and warning
     const triggerShake = (element: HTMLElement | null) => {
       if (element) {
         element.classList.remove('animate-shake');
@@ -51,10 +49,16 @@ const Proveedores = () => {
         element.classList.add('animate-shake');
       }
     };
+    
+    // First trigger shake on container (already rendered)
     triggerShake(containerRef.current);
-    // Use requestAnimationFrame to ensure warning element is rendered before triggering shake
+    
+    // Then show warning and trigger shake after it renders
+    setShowUnsavedWarning(true);
     requestAnimationFrame(() => {
-      triggerShake(warningRef.current);
+      requestAnimationFrame(() => {
+        triggerShake(warningRef.current);
+      });
     });
   }, []);
 
@@ -337,16 +341,16 @@ const Proveedores = () => {
         />
       </div>
 
-      {/* Floating warning snackbar - Google Drive style, positioned absolute to parent */}
+      {/* Floating warning snackbar - Google Drive style */}
       {showUnsavedWarning && (
         <div 
           ref={warningRef}
-          className="absolute bottom-6 left-0 right-0 z-50 flex justify-center pointer-events-none"
+          className="absolute top-4 left-0 right-0 z-50 flex justify-center pointer-events-none md:top-auto md:bottom-6"
         >
-          <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-[hsl(0,50%,20%)] shadow-lg border border-destructive/30 pointer-events-auto">
-            <AlertTriangle className="w-5 h-5 text-white shrink-0" />
-            <span className="text-white text-sm font-medium whitespace-nowrap">
-              ¡Cuidado! Tienes cambios sin guardar.
+          <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[hsl(0,50%,20%)] shadow-lg border border-destructive/30 pointer-events-auto md:gap-2 md:px-4 md:py-3">
+            <AlertTriangle className="w-4 h-4 text-white shrink-0 md:w-5 md:h-5" />
+            <span className="text-white text-xs font-medium md:text-sm">
+              ¡Cuidado! Cambios sin guardar
             </span>
           </div>
         </div>
