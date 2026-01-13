@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import Header from "@/components/Header";
 import { useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Plus, Pencil, Trash2, Building2, Warehouse } from "lucide-react";
+import { Plus, Pencil, Trash2, Building2, Warehouse, AlertTriangle } from "lucide-react";
 import { Supplier } from "@/types";
 import SupplierDialog from "@/components/SupplierDialog";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
@@ -38,16 +38,21 @@ const Proveedores = () => {
   const isOnline = useOnlineStatus();
   const { setBlocked, clearBlock } = useNavigationBlock();
 
+  const warningRef = useRef<HTMLDivElement>(null);
+
   // Trigger shake and warning when navigation is blocked
   const handleBlockedNavigation = useCallback(() => {
     setShowUnsavedWarning(true);
-    // Trigger shake animation by removing and re-adding the class
-    if (containerRef.current) {
-      containerRef.current.classList.remove('animate-shake');
-      // Force reflow to restart animation
-      void containerRef.current.offsetWidth;
-      containerRef.current.classList.add('animate-shake');
-    }
+    // Trigger shake animation on both container and warning
+    const triggerShake = (element: HTMLElement | null) => {
+      if (element) {
+        element.classList.remove('animate-shake');
+        void element.offsetWidth; // Force reflow
+        element.classList.add('animate-shake');
+      }
+    };
+    triggerShake(containerRef.current);
+    triggerShake(warningRef.current);
   }, []);
 
   // Register/unregister navigation block based on unsaved changes
@@ -327,6 +332,19 @@ const Proveedores = () => {
           title="Configuración no disponible offline"
           description="La configuración de listas requiere conexión a internet. Por favor, conéctate y vuelve a intentarlo."
         />
+
+        {/* Floating warning snackbar - Google Drive style */}
+        {showUnsavedWarning && (
+          <div 
+            ref={warningRef}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-3 rounded-lg bg-[hsl(0,50%,20%)] shadow-lg border border-destructive/30"
+          >
+            <AlertTriangle className="w-5 h-5 text-white shrink-0" />
+            <span className="text-white text-sm font-medium whitespace-nowrap">
+              ¡Cuidado! Tienes cambios sin guardar.
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
