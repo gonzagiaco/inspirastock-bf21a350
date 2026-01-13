@@ -17,6 +17,13 @@ export interface PendingOperation {
   error?: string;
 }
 
+export type SyncProgressDetail = {
+  status: "start" | "progress" | "complete";
+  total: number;
+  completed: number;
+  percent: number;
+};
+
 interface SupplierDB {
   id: string;
   user_id: string;
@@ -366,6 +373,12 @@ const SYNC_ORDER = [
 
 // Variable de control para sincronizaciÃ³n (mutex)
 let isSyncInProgress = false;
+export const SYNC_PROGRESS_EVENT = "offline-sync-progress";
+
+function emitSyncProgress(detail: SyncProgressDetail): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(SYNC_PROGRESS_EVENT, { detail }));
+}
 
 export function isOnline(): boolean {
   return navigator.onLine;
@@ -1247,6 +1260,9 @@ export async function syncPendingOperations(): Promise<void> {
   }
 
   isSyncInProgress = true;
+  let totalOps = 0;
+  let completedOps = 0;
+  let didEmitProgress = false;
 
   try {
     resetSyncFailureSummary();
@@ -1263,6 +1279,16 @@ export async function syncPendingOperations(): Promise<void> {
 
     // Re-obtener despuÃ©s de deduplicaciÃ³n
     const dedupedOps = await localDB.pending_operations.toArray();
+    totalOps = dedupedOps.length;
+    if (totalOps > 0) {
+      emitSyncProgress({
+        status: "start",
+        total: totalOps,
+        completed: 0,
+        percent: 0,
+      });
+      didEmitProgress = true;
+    }
 
     // Ordenar por timestamp para respetar orden de creaciÃ³n
     const sortedOps = dedupedOps.sort((a, b) => a.timestamp - b.timestamp);
@@ -1355,23 +1381,60 @@ export async function syncPendingOperations(): Promise<void> {
             recordSyncFailure(op.table_name);
           }
         }
+      } finally {
+        completedOps = Math.min(totalOps, completedOps + 1);
+        if (didEmitProgress) {
+          emitSyncProgress({
+            status: "progress",
+            total: totalOps,
+            completed: completedOps,
+            percent: Math.min(100, Math.round((completedOps / totalOps) * 100)),
+          });
+        }
       }
     }
     if (myStockUpsertOps.length > 0) {
       const myStockResult = await executeMyStockBatchUpserts(myStockUpsertOps);
       successCount += myStockResult.successCount;
       errorCount += myStockResult.errorCount;
+      completedOps = Math.min(totalOps, completedOps + myStockUpsertOps.length);
+      if (didEmitProgress) {
+        emitSyncProgress({
+          status: "progress",
+          total: totalOps,
+          completed: completedOps,
+          percent: Math.min(100, Math.round((completedOps / totalOps) * 100)),
+        });
+      }
     }
     if (batchUpdateOps.length > 0) {
       const batchUpdateResult = await executeBatchUpdates(batchUpdateOps);
       successCount += batchUpdateResult.successCount;
       errorCount += batchUpdateResult.errorCount;
+      completedOps = Math.min(totalOps, completedOps + batchUpdateOps.length);
+      if (didEmitProgress) {
+        emitSyncProgress({
+          status: "progress",
+          total: totalOps,
+          completed: completedOps,
+          percent: Math.min(100, Math.round((completedOps / totalOps) * 100)),
+        });
+      }
     }
 
     if (batchDeleteOps.length > 0) {
       const batchDeleteResult = await executeBatchDeletes(batchDeleteOps);
       successCount += batchDeleteResult.successCount;
       errorCount += batchDeleteResult.errorCount;
+      completedOps = Math.min(totalOps, completedOps + batchDeleteOps.length);
+      if (didEmitProgress) {
+        emitSyncProgress({
+          status: "progress",
+          total: totalOps,
+          completed: completedOps,
+          percent: Math.min(100, Math.round((completedOps / totalOps) * 100)),
+        });
+      }
     }
     console.log(
       `âœ… SincronizaciÃ³n completada: ${successCount} exitosas, ${errorCount} fallidas, ${skippedCount} saltadas`,
@@ -1389,6 +1452,14 @@ export async function syncPendingOperations(): Promise<void> {
       toast.error(failureToast);
     }
   } finally {
+    if (didEmitProgress) {
+      emitSyncProgress({
+        status: "complete",
+        total: totalOps,
+        completed: totalOps,
+        percent: 100,
+      });
+    }
     isSyncInProgress = false;
   }
 }
