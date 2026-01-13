@@ -303,7 +303,7 @@ const Proveedores = () => {
             ref={containerRef}
             className={`flex-1 flex flex-col glassmorphism rounded-xl overflow-hidden transition-colors duration-300 ${
               showUnsavedWarning 
-                ? 'border-2 border-[hsl(0,50%,20%)]' 
+                ? '!border-2 !border-destructive/30' 
                 : 'border border-primary/20'
             }`}
           >
