@@ -52,7 +52,10 @@ const Proveedores = () => {
       }
     };
     triggerShake(containerRef.current);
-    triggerShake(warningRef.current);
+    // Use requestAnimationFrame to ensure warning element is rendered before triggering shake
+    requestAnimationFrame(() => {
+      triggerShake(warningRef.current);
+    });
   }, []);
 
   // Register/unregister navigation block based on unsaved changes
@@ -276,7 +279,7 @@ const Proveedores = () => {
   );
 
   return (
-    <div className="flex-1 w-full max-w-full overflow-hidden flex flex-col">
+    <div className="flex-1 w-full max-w-full overflow-hidden flex flex-col relative">
       <div className="p-4 pt-11 lg:px-4 lg:py-10 flex-1 flex flex-col">
         {currentView.type !== 'suppliers' && (
           <SupplierBreadcrumbs steps={getBreadcrumbSteps()} onBack={handleBack} />
@@ -332,20 +335,22 @@ const Proveedores = () => {
           title="Configuración no disponible offline"
           description="La configuración de listas requiere conexión a internet. Por favor, conéctate y vuelve a intentarlo."
         />
+      </div>
 
-        {/* Floating warning snackbar - Google Drive style */}
-        {showUnsavedWarning && (
-          <div 
-            ref={warningRef}
-            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-3 rounded-lg bg-[hsl(0,50%,20%)] shadow-lg border border-destructive/30"
-          >
+      {/* Floating warning snackbar - Google Drive style, positioned absolute to parent */}
+      {showUnsavedWarning && (
+        <div 
+          ref={warningRef}
+          className="absolute bottom-6 left-0 right-0 z-50 flex justify-center pointer-events-none"
+        >
+          <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-[hsl(0,50%,20%)] shadow-lg border border-destructive/30 pointer-events-auto">
             <AlertTriangle className="w-5 h-5 text-white shrink-0" />
             <span className="text-white text-sm font-medium whitespace-nowrap">
               ¡Cuidado! Tienes cambios sin guardar.
             </span>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };
