@@ -266,21 +266,40 @@ const CollapsibleSidebar = () => {
 
       {/* Sidebar */}
       <style>{`
-        @media (min-width: 320px) and (max-width: 375px) {
-          .compact-on-xs nav a {
-            padding: 6px 8px !important;
+        @media (max-width: 1023px) {
+          .compact-on-mobile nav a {
+            padding: 5px 6px !important;
+            gap: 0.4rem !important;
+            border-radius: 0.625rem !important;
+          }
+          .compact-on-mobile nav a span {
+            font-size: 13px !important;
+          }
+          .compact-on-mobile nav a > div {
+            padding: 5px !important;
+          }
+          .compact-on-mobile nav a svg {
+            width: 14px !important;
+            height: 14px !important;
+          }
+          .compact-on-mobile nav {
             gap: 0.5rem !important;
-            border-radius: 0.75rem !important;
           }
-          .compact-on-xs nav a span {
-            font-size: 14px !important;
+        }
+        @media (min-width: 320px) and (max-width: 375px) {
+          .compact-on-mobile nav a {
+            padding: 4px 6px !important;
+            gap: 0.35rem !important;
           }
-          .compact-on-xs nav a > div {
-            padding: 6px !important;
+          .compact-on-mobile nav a span {
+            font-size: 12px !important;
           }
-          .compact-on-xs nav a svg {
-            width: 16px !important;
-            height: 16px !important;
+          .compact-on-mobile nav a > div {
+            padding: 4px !important;
+          }
+          .compact-on-mobile nav a svg {
+            width: 13px !important;
+            height: 13px !important;
           }
         }
       `}</style>
@@ -288,14 +307,14 @@ const CollapsibleSidebar = () => {
       <aside
         className={`
           fixed lg:sticky top-0 lg:safe-top-fixed right-0 lg:left-0 lg:right-auto min-h-[100dvh] lg:h-screen bg-background/70 backdrop-blur-xl border-l lg:border-r border-primary/20 
-          flex flex-col p-6 z-40 transition-all duration-300
+          flex flex-col p-4 lg:p-6 z-40 transition-all duration-300
           ${isMobileOpen ? "translate-x-0" : "translate-x-full lg:translate-x-0"}
-          ${isCollapsed ? "lg:w-32" : "w-64"}
-          compact-on-xs
+          ${isCollapsed ? "lg:w-32" : "w-60 lg:w-64"}
+          compact-on-mobile
         `}
         style={{
-          paddingTop: "max(env(safe-area-inset-top), 1.5rem)",
-          paddingBottom: "max(env(safe-area-inset-bottom), 1.5rem)",
+          paddingTop: "max(env(safe-area-inset-top), 1rem)",
+          paddingBottom: "max(env(safe-area-inset-bottom), 1rem)",
         }}
       >
         {/* Desktop Collapse Toggle */}
@@ -311,15 +330,15 @@ const CollapsibleSidebar = () => {
         </button>
 
         {/* Logo */}
-        <div className={`flex items-center mt-10 mb-5 from-1024:mt-0 ${isCollapsed ? "justify-center" : "gap-3"}`}>
-          <div className="w-14 h-14 text-primary flex-shrink-0">
+        <div className={`flex items-center mt-6 lg:mt-10 mb-3 lg:mb-5 from-1024:mt-0 ${isCollapsed ? "justify-center" : "gap-2 lg:gap-3"}`}>
+          <div className="w-10 h-10 lg:w-14 lg:h-14 text-primary flex-shrink-0">
             <img src="LogoTransparente.png" alt="" />
           </div>
-          {!isCollapsed && <h1 className="text-xl font-bold text-foreground whitespace-nowrap">InspiraStock</h1>}
+          {!isCollapsed && <h1 className="text-lg lg:text-xl font-bold text-foreground whitespace-nowrap">InspiraStock</h1>}
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 space-y-4">
+        <nav className="flex-1 space-y-2 lg:space-y-4">
           {navigation.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
