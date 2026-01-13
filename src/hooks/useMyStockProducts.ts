@@ -1,6 +1,6 @@
-﻿import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { localDB } from "@/lib/localDB";
+import { localDB, MY_STOCK_UPDATED_EVENT } from "@/lib/localDB";
 import { useOnlineStatus } from "./useOnlineStatus";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -271,6 +271,16 @@ export function useMyStockProducts(options: UseMyStockProductsOptions = {}) {
     staleTime: Infinity,
   });
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleMyStockUpdated = () => {
+      queryClient.invalidateQueries({ queryKey: ["my-stock"], exact: false });
+    };
+
+    window.addEventListener(MY_STOCK_UPDATED_EVENT, handleMyStockUpdated as EventListener);
+    return () => window.removeEventListener(MY_STOCK_UPDATED_EVENT, handleMyStockUpdated as EventListener);
+  }, [queryClient]);
+
   const filteredData = useMemo(() => {
     let data = (query.data ?? []) as any[];
 
@@ -358,4 +368,5 @@ export async function syncProductMyStockState(productId: string): Promise<void> 
     updated_at: data.updated_at,
   });
 }
+
 

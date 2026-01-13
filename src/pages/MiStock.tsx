@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { Filter, Loader2, Package, X } from "lucide-react";
+import { Filter, Package, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -19,7 +19,6 @@ import { toast } from "sonner";
 import { useRequestCartStore } from "@/stores/requestCartStore";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
 import { useConfigStore } from "@/stores/configStore";
-import { SYNC_PROGRESS_EVENT, type SyncProgressDetail } from "@/lib/localDB";
 
 function parsePriceValue(value: any): number | null {
   if (value == null) return null;
@@ -35,12 +34,6 @@ export default function MiStock() {
   const [onlyWithStock, setOnlyWithStock] = useState(false);
   const [isCartCollapsed, setIsCartCollapsed] = useState(true);
   const [isClearCartDialogOpen, setIsClearCartDialogOpen] = useState(false);
-  const [syncProgress, setSyncProgress] = useState({
-    active: false,
-    percent: 0,
-    total: 0,
-    completed: 0,
-  });
   const { requestList, addOrIncrement, updateQuantity, removeItem, clear } = useRequestCartStore();
   const { autoAddLowStockToCart, addDismissedLowStockIds } = useConfigStore();
 
@@ -83,34 +76,6 @@ export default function MiStock() {
       setIsHydrated(true);
     }
   }, [isSuccessProducts, isLoadingLists, isLoadingSuppliers, lists]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const handleSyncProgress = (event: Event) => {
-      const detail = (event as CustomEvent<SyncProgressDetail>).detail;
-      if (!detail) return;
-
-      if (detail.status === "complete") {
-        setSyncProgress({
-          active: false,
-          percent: detail.percent,
-          total: detail.total,
-          completed: detail.completed,
-        });
-        return;
-      }
-
-      setSyncProgress({
-        active: true,
-        percent: detail.percent,
-        total: detail.total,
-        completed: detail.completed,
-      });
-    };
-
-    window.addEventListener(SYNC_PROGRESS_EVENT, handleSyncProgress as EventListener);
-    return () => window.removeEventListener(SYNC_PROGRESS_EVENT, handleSyncProgress as EventListener);
-  }, []);
 
   // Handler para actualizar cantidad localmente (optimista)
   const handleUpdateQuantity = useCallback((productId: string, newQuantity: number) => {
@@ -449,23 +414,6 @@ export default function MiStock() {
             <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
               <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-primary"></div>
               Actualizando mi stock...
-            </div>
-          )}
-          {syncProgress.active && (
-            <div className="mt-3 rounded-xl border bg-card/80 px-4 py-3 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                  <span>Sincronizando operaciones</span>
-                </div>
-                <span className="text-xs font-semibold text-primary">{syncProgress.percent}%</span>
-              </div>
-              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-primary/15">
-                <div
-                  className="h-full rounded-full bg-primary transition-all duration-300"
-                  style={{ width: `${syncProgress.percent}%` }}
-                />
-              </div>
             </div>
           )}
         </div>

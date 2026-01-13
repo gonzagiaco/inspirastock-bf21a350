@@ -374,10 +374,16 @@ const SYNC_ORDER = [
 // Variable de control para sincronizaciÃ³n (mutex)
 let isSyncInProgress = false;
 export const SYNC_PROGRESS_EVENT = "offline-sync-progress";
+export const MY_STOCK_UPDATED_EVENT = "my-stock-updated";
 
 function emitSyncProgress(detail: SyncProgressDetail): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(SYNC_PROGRESS_EVENT, { detail }));
+}
+
+function emitMyStockUpdated(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(MY_STOCK_UPDATED_EVENT));
 }
 
 export function isOnline(): boolean {
@@ -1267,6 +1273,11 @@ export async function syncPendingOperations(): Promise<void> {
   try {
     resetSyncFailureSummary();
     const operations = await localDB.pending_operations.toArray();
+    const opWeights = new Map<string, number>();
+    for (const op of operations) {
+      const key = `${op.table_name}:${op.record_id}`;
+      opWeights.set(key, (opWeights.get(key) ?? 0) + 1);
+    }
 
     if (operations.length === 0) {
       console.log("âœ… No hay operaciones pendientes");
@@ -1279,7 +1290,8 @@ export async function syncPendingOperations(): Promise<void> {
 
     // Re-obtener despuÃ©s de deduplicaciÃ³n
     const dedupedOps = await localDB.pending_operations.toArray();
-    totalOps = dedupedOps.length;
+    const opWeightFor = (op: PendingOperation) => opWeights.get(`${op.table_name}:${op.record_id}`) ?? 1;
+    totalOps = dedupedOps.reduce((sum, op) => sum + opWeightFor(op), 0);
     if (totalOps > 0) {
       emitSyncProgress({
         status: "start",
@@ -1288,6 +1300,9 @@ export async function syncPendingOperations(): Promise<void> {
         percent: 0,
       });
       didEmitProgress = true;
+    }
+    if (dedupedOps.length === 0) {
+      return;
     }
 
     // Ordenar por timestamp para respetar orden de creaciÃ³n
@@ -1382,7 +1397,7 @@ export async function syncPendingOperations(): Promise<void> {
           }
         }
       } finally {
-        completedOps = Math.min(totalOps, completedOps + 1);
+        completedOps = Math.min(totalOps, completedOps + opWeightFor(op));
         if (didEmitProgress) {
           emitSyncProgress({
             status: "progress",
@@ -1397,7 +1412,8 @@ export async function syncPendingOperations(): Promise<void> {
       const myStockResult = await executeMyStockBatchUpserts(myStockUpsertOps);
       successCount += myStockResult.successCount;
       errorCount += myStockResult.errorCount;
-      completedOps = Math.min(totalOps, completedOps + myStockUpsertOps.length);
+      const batchWeight = myStockUpsertOps.reduce((sum, op) => sum + opWeightFor(op), 0);
+      completedOps = Math.min(totalOps, completedOps + batchWeight);
       if (didEmitProgress) {
         emitSyncProgress({
           status: "progress",
@@ -1411,7 +1427,8 @@ export async function syncPendingOperations(): Promise<void> {
       const batchUpdateResult = await executeBatchUpdates(batchUpdateOps);
       successCount += batchUpdateResult.successCount;
       errorCount += batchUpdateResult.errorCount;
-      completedOps = Math.min(totalOps, completedOps + batchUpdateOps.length);
+      const batchWeight = batchUpdateOps.reduce((sum, item) => sum + opWeightFor(item.op), 0);
+      completedOps = Math.min(totalOps, completedOps + batchWeight);
       if (didEmitProgress) {
         emitSyncProgress({
           status: "progress",
@@ -1426,7 +1443,8 @@ export async function syncPendingOperations(): Promise<void> {
       const batchDeleteResult = await executeBatchDeletes(batchDeleteOps);
       successCount += batchDeleteResult.successCount;
       errorCount += batchDeleteResult.errorCount;
-      completedOps = Math.min(totalOps, completedOps + batchDeleteOps.length);
+      const batchWeight = batchDeleteOps.reduce((sum, item) => sum + opWeightFor(item.op), 0);
+      completedOps = Math.min(totalOps, completedOps + batchWeight);
       if (didEmitProgress) {
         emitSyncProgress({
           status: "progress",
@@ -2881,6 +2899,8 @@ export async function updateProductQuantityOffline(
       updated_at: now,
     });
   }
+
+  emitMyStockUpdated();
 }
 
 export async function updateProductThresholdOffline(
@@ -2938,6 +2958,8 @@ export async function updateProductThresholdOffline(
       });
     }
   }
+
+  emitMyStockUpdated();
 }
 
 export async function addToMyStock(
@@ -3024,6 +3046,8 @@ export async function addToMyStock(
       });
     }
   }
+
+  emitMyStockUpdated();
 }
 export async function bulkAddToMyStockOffline(args: {
   productIds: string[];
@@ -3149,6 +3173,7 @@ export async function bulkAddToMyStockOffline(args: {
   );
 
   await queueOperationsBulk(queueOps);
+  emitMyStockUpdated();
   return { processed: productIds.length };
 }
 
@@ -3213,6 +3238,7 @@ export async function bulkRemoveFromMyStockOffline(args: { productIds: string[] 
   }
 
   await queueOperationsBulk(queueOps);
+  emitMyStockUpdated();
   return { processed: productIds.length };
 }
 
@@ -3257,6 +3283,8 @@ export async function removeFromMyStock(productId: string): Promise<void> {
       });
     }
   }
+
+  emitMyStockUpdated();
 }
 // Rename a column key in JSONB data for all products in a list (offline)
 export async function renameColumnKeyOffline(

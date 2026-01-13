@@ -8,6 +8,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import CollapsibleSidebar from "./components/CollapsibleSidebar";
 import { ConnectionBadge } from "./components/ConnectionBadge";
 import AutoAddLowStockToCart from "./components/AutoAddLowStockToCart";
+import SyncProgressBar from "./components/SyncProgressBar";
 
 import Stock from "./pages/Stock";
 import MiStock from "./pages/MiStock";
@@ -27,6 +28,7 @@ const App = () => (
         <Toaster />
         <Sonner />
         <ConnectionBadge />
+        <SyncProgressBar />
         <BrowserRouter>
           <Routes>
             <Route path="/auth" element={<Auth />} />
