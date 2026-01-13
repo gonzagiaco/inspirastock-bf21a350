@@ -345,7 +345,7 @@ const Proveedores = () => {
       {showUnsavedWarning && (
         <div 
           ref={warningRef}
-          className="absolute top-4 left-2 right-2 md:left-0 md:right-0 z-50 flex justify-center pointer-events-none"
+          className="fixed top-4 left-0 right-0 z-50 flex justify-center pointer-events-none px-2 md:px-0"
         >
           <div className="w-full md:w-auto flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[hsl(0,50%,20%)] shadow-lg border border-destructive/30 pointer-events-auto md:px-4 md:py-3">
             <AlertTriangle className="w-4 h-4 text-white shrink-0 md:w-5 md:h-5" />
