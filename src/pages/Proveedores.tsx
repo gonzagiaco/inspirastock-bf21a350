@@ -51,13 +51,11 @@ const Proveedores = () => {
       }
     };
     
-    // First trigger shake on container (already rendered)
-    triggerShake(containerRef.current);
-    
-    // Then show warning and trigger shake after it renders
+    // Show warning first so border changes, then trigger shakes after render
     setShowUnsavedWarning(true);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
+        triggerShake(containerRef.current);
         triggerShake(warningRef.current);
       });
     });
@@ -305,7 +303,7 @@ const Proveedores = () => {
             ref={containerRef}
             className={`flex-1 flex flex-col glassmorphism rounded-xl overflow-hidden transition-colors duration-300 ${
               showUnsavedWarning 
-                ? 'border-2 border-destructive' 
+                ? 'border-2 border-[hsl(0,50%,20%)]' 
                 : 'border border-primary/20'
             }`}
           >
