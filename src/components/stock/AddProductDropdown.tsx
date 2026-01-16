@@ -100,7 +100,7 @@ export function AddProductDropdown({
     const prevQuantity = Number(product.quantity || 0);
     const prevInMyStock = Boolean(product.in_my_stock);
     const nextQuantity = Math.max(1, prevQuantity + 1);
-    const optimisticPatch = { quantity: nextQuantity, in_my_stock: true };
+    const optimisticPatch = { quantity: nextQuantity, in_my_stock: true, stock_threshold: 0 };
 
     setHasBeenAddedToStock(true);
     product.quantity = nextQuantity;

@@ -6,7 +6,7 @@ interface RequestCartStore {
   requestList: RequestItem[];
   setRequestList: (items: RequestItem[]) => void;
   addOrIncrement: (item: RequestItem) => void;
-  updateQuantity: (id: string, quantity: number) => void;
+  updateQuantity: (id: string, quantity: number, options?: { manualOverride?: boolean }) => void;
   updateItemPrice: (productId: string, newPrice: number) => void;
   removeItem: (id: string) => void;
   clear: () => void;
@@ -29,9 +29,17 @@ export const useRequestCartStore = create<RequestCartStore>()(
           }
           return { requestList: [...state.requestList, item] };
         }),
-      updateQuantity: (id, quantity) =>
+      updateQuantity: (id, quantity, options) =>
         set((state) => ({
-          requestList: state.requestList.map((item) => (item.id === id ? { ...item, quantity } : item)),
+          requestList: state.requestList.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  quantity,
+                  manualOverride: options?.manualOverride ? true : item.manualOverride,
+                }
+              : item,
+          ),
         })),
       updateItemPrice: (productId, newPrice) =>
         set((state) => ({

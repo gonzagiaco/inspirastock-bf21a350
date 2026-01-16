@@ -565,7 +565,14 @@ export function ProductCardView({
                               onLocalUpdate={(newQty) => {
                                 setLocalProducts((prev) =>
                                   prev.map((p: any) =>
-                                    p?.id === product.id ? { ...p, quantity: newQty, in_my_stock: true } : p,
+                                    p?.id === product.id
+                                      ? {
+                                          ...p,
+                                          quantity: newQty,
+                                          in_my_stock: true,
+                                          stock_threshold: p?.in_my_stock ? p.stock_threshold : 0,
+                                        }
+                                      : p,
                                   ),
                                 );
                               }}

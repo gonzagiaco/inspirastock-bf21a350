@@ -199,7 +199,7 @@ export default function MiStock() {
     const effectiveSupplierId = product.supplierId || product.supplier_id || "";
 
     if (existingItem) {
-      updateQuantity(existingItem.id, existingItem.quantity + 1);
+      updateQuantity(existingItem.id, existingItem.quantity + 1, { manualOverride: true });
     } else {
       let finalPrice = parsePriceValue(product.price) ?? 0;
       const cartPriceColumn = mappingConfig?.cart_price_column;
@@ -226,7 +226,7 @@ export default function MiStock() {
   }, [addOrIncrement, requestList, updateQuantity]);
 
   const handleUpdateRequestQuantity = useCallback((id: string, quantity: number) => {
-    updateQuantity(id, quantity);
+    updateQuantity(id, quantity, { manualOverride: true });
   }, [updateQuantity]);
 
   const handleRemoveFromRequest = useCallback((id: string) => {

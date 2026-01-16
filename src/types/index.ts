@@ -19,6 +19,8 @@ export interface RequestItem {
   supplierId: string;
   costPrice: number;
   quantity: number;
+  autoLowStock?: boolean;
+  manualOverride?: boolean;
 }
 
 export interface InvoiceProduct {

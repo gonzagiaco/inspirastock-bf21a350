@@ -156,7 +156,7 @@ export default function Stock() {
       product.supplierId || lists.find((l: any) => l.id === product.listId)?.supplier_id || "";
 
     if (existingItem) {
-      updateQuantity(existingItem.id, existingItem.quantity + 1);
+      updateQuantity(existingItem.id, existingItem.quantity + 1, { manualOverride: true });
     } else {
       let finalPrice = parsePriceValue(product.price) ?? 0;
       const cartPriceColumn = mappingConfig?.cart_price_column;
@@ -226,7 +226,7 @@ export default function Stock() {
   };
 
   const handleUpdateRequestQuantity = (id: string, quantity: number) => {
-    updateQuantity(id, quantity);
+    updateQuantity(id, quantity, { manualOverride: true });
   };
 
   const handleRemoveFromRequest = (id: string) => {

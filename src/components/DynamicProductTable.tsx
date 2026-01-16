@@ -1109,8 +1109,12 @@ export const DynamicProductTable = ({
                   listId={listId}
                   value={row.original.quantity}
                   onLocalUpdate={(newQty) => {
+                    const wasInMyStock = Boolean(row.original.in_my_stock);
                     row.original.quantity = newQty;
                     row.original.in_my_stock = true;
+                    if (!wasInMyStock) {
+                      row.original.stock_threshold = 0;
+                    }
                   }}
                   visibleSpan={false}
                 />

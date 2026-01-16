@@ -375,15 +375,20 @@ const SYNC_ORDER = [
 let isSyncInProgress = false;
 export const SYNC_PROGRESS_EVENT = "offline-sync-progress";
 export const MY_STOCK_UPDATED_EVENT = "my-stock-updated";
+type MyStockUpdatedDetail = {
+  productId?: string;
+  productIds?: string[];
+  listId?: string;
+};
 
 function emitSyncProgress(detail: SyncProgressDetail): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(SYNC_PROGRESS_EVENT, { detail }));
 }
 
-function emitMyStockUpdated(): void {
+function emitMyStockUpdated(detail?: MyStockUpdatedDetail): void {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent(MY_STOCK_UPDATED_EVENT));
+  window.dispatchEvent(new CustomEvent(MY_STOCK_UPDATED_EVENT, { detail }));
 }
 
 export function isOnline(): boolean {
@@ -2900,7 +2905,7 @@ export async function updateProductQuantityOffline(
     });
   }
 
-  emitMyStockUpdated();
+  emitMyStockUpdated({ productId, listId });
 }
 
 export async function updateProductThresholdOffline(
@@ -2959,7 +2964,7 @@ export async function updateProductThresholdOffline(
     }
   }
 
-  emitMyStockUpdated();
+  emitMyStockUpdated({ productId, listId });
 }
 
 export async function addToMyStock(
@@ -3047,7 +3052,7 @@ export async function addToMyStock(
     }
   }
 
-  emitMyStockUpdated();
+  emitMyStockUpdated({ productId, listId: indexRecord?.list_id });
 }
 export async function bulkAddToMyStockOffline(args: {
   productIds: string[];
@@ -3173,7 +3178,7 @@ export async function bulkAddToMyStockOffline(args: {
   );
 
   await queueOperationsBulk(queueOps);
-  emitMyStockUpdated();
+  emitMyStockUpdated({ productIds });
   return { processed: productIds.length };
 }
 
@@ -3238,7 +3243,7 @@ export async function bulkRemoveFromMyStockOffline(args: { productIds: string[] 
   }
 
   await queueOperationsBulk(queueOps);
-  emitMyStockUpdated();
+  emitMyStockUpdated({ productIds });
   return { processed: productIds.length };
 }
 
@@ -3284,7 +3289,7 @@ export async function removeFromMyStock(productId: string): Promise<void> {
     }
   }
 
-  emitMyStockUpdated();
+  emitMyStockUpdated({ productId, listId: indexRecord?.list_id });
 }
 // Rename a column key in JSONB data for all products in a list (offline)
 export async function renameColumnKeyOffline(
