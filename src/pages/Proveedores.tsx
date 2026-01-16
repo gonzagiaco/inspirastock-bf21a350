@@ -30,6 +30,7 @@ const Proveedores = () => {
   const [showOfflineWarning, setShowOfflineWarning] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
+  const [isListSaving, setIsListSaving] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const listConfigRef = useRef<ListConfigurationViewHandle>(null);
 
@@ -313,6 +314,7 @@ const Proveedores = () => {
               onSaved={handleConfigSaved}
               onHasUnsavedChanges={setHasUnsavedChanges}
               onReset={handleResetChanges}
+              onSavingChange={setIsListSaving}
               showWarning={showUnsavedWarning}
             />
           </div>
@@ -350,7 +352,8 @@ const Proveedores = () => {
           <div className="w-full md:w-auto flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[hsl(0,50%,20%)] shadow-lg border border-destructive/30 pointer-events-auto md:px-4 md:py-3">
             <AlertTriangle className="w-4 h-4 text-white shrink-0 md:w-5 md:h-5" />
             <span className="text-white text-xs font-medium md:text-sm whitespace-nowrap">
-              ¡Cuidado! Cambios sin guardar
+              <span className="hidden md:inline">¡Cuidado! </span>
+              Cambios sin guardar
             </span>
             <span className="mx-1 text-white/40">|</span>
             <button
@@ -361,9 +364,10 @@ const Proveedores = () => {
             </button>
             <button
               onClick={() => listConfigRef.current?.save()}
-              className="text-white font-semibold text-xs md:text-sm underline underline-offset-2 transition-colors hover:text-white/90 whitespace-nowrap"
+              disabled={isListSaving}
+              className="text-white font-semibold text-xs md:text-sm underline underline-offset-2 transition-colors hover:text-white/90 whitespace-nowrap disabled:opacity-70"
             >
-              Guardar
+              {isListSaving ? "Guardando..." : "Guardar"}
             </button>
           </div>
         </div>

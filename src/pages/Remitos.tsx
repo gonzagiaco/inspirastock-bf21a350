@@ -287,13 +287,13 @@ const Remitos = () => {
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="secondary"
-                className="bg-emerald-600 text-white hover:bg-emerald-700"
+                className="w-full bg-emerald-600 text-white hover:bg-emerald-700 sm:w-auto"
                 onClick={() => setIsCreateClientDialogOpen(true)}
               >
                 <UserPlus className="mr-2 h-4 w-4" />
                 Nuevo Cliente
               </Button>
-              <Button onClick={() => handleOpenNewNote()}>
+              <Button className="w-full sm:w-auto" onClick={() => handleOpenNewNote()}>
                 <Plus className="mr-2 h-4 w-4" />
                 Nuevo Remito
               </Button>

@@ -51,10 +51,11 @@ interface ListConfigurationViewProps {
   onHasUnsavedChanges?: (hasChanges: boolean) => void;
   onReset?: () => void;
   showWarning?: boolean;
+  onSavingChange?: (isSaving: boolean) => void;
 }
 
 export const ListConfigurationView = forwardRef<ListConfigurationViewHandle, ListConfigurationViewProps>(
-  function ListConfigurationView({ listId, onSaved, onHasUnsavedChanges, onReset, showWarning }, ref) {
+  function ListConfigurationView({ listId, onSaved, onHasUnsavedChanges, onReset, showWarning, onSavingChange }, ref) {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
 
@@ -113,6 +114,10 @@ export const ListConfigurationView = forwardRef<ListConfigurationViewHandle, Lis
   useEffect(() => {
     onHasUnsavedChanges?.(hasUnsavedChanges);
   }, [hasUnsavedChanges, onHasUnsavedChanges]);
+
+  useEffect(() => {
+    onSavingChange?.(isSaving);
+  }, [isSaving, onSavingChange]);
 
   useEffect(() => {
     let isCancelled = false;

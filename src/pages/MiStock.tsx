@@ -387,28 +387,28 @@ export default function MiStock() {
               </div>
             </div>
           </div>
-          <div className="mb-4 flex justify-end">
+          <div className="mb-4 flex flex-col items-start gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="order-2 flex items-center gap-3 flex-wrap text-sm text-muted-foreground lg:order-1">
+              <span>{totalProducts} productos en mi stock</span>
+              <span>&bull;</span>
+              <span>{productsWithStock} con stock disponible</span>
+              <span>&bull;</span>
+              <span>
+                {visibleSupplierSections.length}{" "}
+                {visibleSupplierSections.length === 1
+                  ? "proveedor"
+                  : "proveedores"}
+              </span>
+              {!isOnline && (
+                <span className="text-amber-500">(modo offline)</span>
+              )}
+            </div>
             <Button
-              className="bg-primary text-primary-foreground hover:bg-primary/90"
+              className="order-1 bg-primary text-primary-foreground hover:bg-primary/90 lg:order-2"
               onClick={handleAddLowStockToCart}
             >
               Agregar bajo stock al carrito
             </Button>
-          </div>
-          <div className="flex items-center gap-3 flex-wrap text-sm text-muted-foreground">
-            <span>{totalProducts} productos en mi stock</span>
-            <span>•</span>
-            <span>{productsWithStock} con stock disponible</span>
-            <span>•</span>
-            <span>
-              {visibleSupplierSections.length}{" "}
-              {visibleSupplierSections.length === 1
-                ? "proveedor"
-                : "proveedores"}
-            </span>
-            {!isOnline && (
-              <span className="text-amber-500">(modo offline)</span>
-            )}
           </div>
           {isRefreshing && (
             <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">

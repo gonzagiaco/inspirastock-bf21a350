@@ -44,7 +44,8 @@ const formatArgentinaDateTime = (value?: string | null) => {
     minute: "2-digit",
     hour12: false,
   }).formatToParts(date);
-  const getPart = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  const getPart = (type: string) =>
+    parts.find((part) => part.type === type)?.value ?? "";
   const day = getPart("day");
   const month = getPart("month");
   const year = getPart("year");
@@ -54,7 +55,8 @@ const formatArgentinaDateTime = (value?: string | null) => {
   return `${day}/${month}/${year} ${hour}:${minute}`;
 };
 
-const getArgentinaDate = (base: Date) => new Date(base.toLocaleString("en-US", { timeZone: ARG_TIMEZONE }));
+const getArgentinaDate = (base: Date) =>
+  new Date(base.toLocaleString("en-US", { timeZone: ARG_TIMEZONE }));
 
 const getNextArgentinaUpdate = (base: Date) => {
   const argentinaNow = getArgentinaDate(base);
@@ -83,7 +85,9 @@ const CollapsibleSidebar = () => {
   const getUserInitials = () => {
     if (user?.user_metadata?.full_name) {
       const names = user.user_metadata.full_name.split(" ");
-      return names.length > 1 ? `${names[0][0]}${names[names.length - 1][0]}`.toUpperCase() : names[0][0].toUpperCase();
+      return names.length > 1
+        ? `${names[0][0]}${names[names.length - 1][0]}`.toUpperCase()
+        : names[0][0].toUpperCase();
     }
     return user?.email?.[0].toUpperCase() || "U";
   };
@@ -99,13 +103,16 @@ const CollapsibleSidebar = () => {
 
   const isActive = (path: string) => location.pathname === path;
 
-  const applyDollarSetting = useCallback((value: any, updatedAt?: string | null) => {
-    const rate = Number(value?.rate ?? value?.venta ?? 0);
-    setDollarRate(Number.isFinite(rate) && rate > 0 ? rate : null);
-    const resolvedUpdatedAt =
-      updatedAt ?? value?.updatedAt ?? value?.fechaActualizacion ?? null;
-    setDollarUpdatedAt(resolvedUpdatedAt);
-  }, []);
+  const applyDollarSetting = useCallback(
+    (value: any, updatedAt?: string | null) => {
+      const rate = Number(value?.rate ?? value?.venta ?? 0);
+      setDollarRate(Number.isFinite(rate) && rate > 0 ? rate : null);
+      const resolvedUpdatedAt =
+        updatedAt ?? value?.updatedAt ?? value?.fechaActualizacion ?? null;
+      setDollarUpdatedAt(resolvedUpdatedAt);
+    },
+    [],
+  );
 
   useEffect(() => {
     // Si se expande el sidebar, cerramos el panel de logout flotante
@@ -162,7 +169,8 @@ const CollapsibleSidebar = () => {
 
     setIsRefreshingDollar(true);
     try {
-      const { data, error } = await supabase.functions.invoke("update-dollar-rate");
+      const { data, error } =
+        await supabase.functions.invoke("update-dollar-rate");
       if (error) throw error;
       if (!data?.success || !data?.data) {
         throw new Error("No se pudo actualizar el dólar oficial");
@@ -177,7 +185,8 @@ const CollapsibleSidebar = () => {
         created_at: now,
       });
       const rate = Number(data.data.rate ?? data.data.venta ?? 0);
-      const rateLabel = Number.isFinite(rate) && rate > 0 ? rate.toFixed(2) : "--";
+      const rateLabel =
+        Number.isFinite(rate) && rate > 0 ? rate.toFixed(2) : "--";
       toast.success(`Dólar actualizado: $${rateLabel}`);
     } catch (error: any) {
       console.error("Error actualizando dólar oficial:", error);
@@ -194,7 +203,8 @@ const CollapsibleSidebar = () => {
 
     refreshInFlightRef.current = true;
     try {
-      const { data, error } = await supabase.functions.invoke("update-dollar-rate");
+      const { data, error } =
+        await supabase.functions.invoke("update-dollar-rate");
       if (error) throw error;
       if (!data?.success || !data?.data) {
         throw new Error("No se pudo actualizar el dólar oficial");
@@ -243,7 +253,8 @@ const CollapsibleSidebar = () => {
   }, [refreshDollarSilent]);
 
   const formattedDollarUpdatedAt = formatArgentinaDateTime(dollarUpdatedAt);
-  const displayDollarUpdatedAt = formattedDollarUpdatedAt ?? dollarUpdatedAt ?? null;
+  const displayDollarUpdatedAt =
+    formattedDollarUpdatedAt ?? dollarUpdatedAt ?? null;
 
   return (
     <>
@@ -256,50 +267,58 @@ const CollapsibleSidebar = () => {
           right: "1rem",
         }}
       >
-        {isMobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+        {isMobileOpen ? (
+          <X className="h-6 w-6" />
+        ) : (
+          <Menu className="h-6 w-6" />
+        )}
       </button>
 
       {/* Mobile Overlay */}
       {isMobileOpen && (
-        <div className="fixed inset-0 bg-black/50 z-20 lg:hidden" onClick={() => setIsMobileOpen(false)} />
+        <div
+          className="fixed inset-0 bg-black/50 z-20 lg:hidden"
+          onClick={() => setIsMobileOpen(false)}
+        />
       )}
 
       {/* Sidebar */}
       <style>{`
         @media (max-width: 1023px) {
           .compact-on-mobile nav a {
-            padding: 5px 6px !important;
-            gap: 0.4rem !important;
+            padding: 10px 12px !important;
+            gap: 0.6rem !important;
             border-radius: 0.625rem !important;
           }
           .compact-on-mobile nav a span {
-            font-size: 13px !important;
+            font-size: 15px !important;
           }
           .compact-on-mobile nav a > div {
-            padding: 5px !important;
+            padding: 7px !important;
           }
           .compact-on-mobile nav a svg {
-            width: 14px !important;
-            height: 14px !important;
+            width: 18px !important;
+            height: 18px !important;
           }
           .compact-on-mobile nav {
-            gap: 0.5rem !important;
+            gap: 0.6rem !important;
+            margin-bottom: 0.75rem !important;
           }
         }
         @media (min-width: 320px) and (max-width: 375px) {
           .compact-on-mobile nav a {
-            padding: 4px 6px !important;
-            gap: 0.35rem !important;
+            padding: 8px 10px !important;
+            gap: 0.55rem !important;
           }
           .compact-on-mobile nav a span {
-            font-size: 12px !important;
+            font-size: 14px !important;
           }
           .compact-on-mobile nav a > div {
-            padding: 4px !important;
+            padding: 6px !important;
           }
           .compact-on-mobile nav a svg {
-            width: 13px !important;
-            height: 13px !important;
+            width: 16px !important;
+            height: 16px !important;
           }
         }
       `}</style>
@@ -330,11 +349,17 @@ const CollapsibleSidebar = () => {
         </button>
 
         {/* Logo */}
-        <div className={`flex items-center mt-6 lg:mt-10 mb-3 lg:mb-5 from-1024:mt-0 ${isCollapsed ? "justify-center" : "gap-2 lg:gap-3"}`}>
+        <div
+          className={`flex items-center mt-6 lg:mt-10 mb-3 lg:mb-5 from-1024:mt-0 ${isCollapsed ? "justify-center" : "gap-2 lg:gap-3"}`}
+        >
           <div className="w-10 h-10 lg:w-14 lg:h-14 text-primary flex-shrink-0">
             <img src="LogoTransparente.png" alt="" />
           </div>
-          {!isCollapsed && <h1 className="text-lg lg:text-xl font-bold text-foreground whitespace-nowrap">InspiraStock</h1>}
+          {!isCollapsed && (
+            <h1 className="text-lg lg:text-xl font-bold text-foreground whitespace-nowrap">
+              InspiraStock
+            </h1>
+          )}
         </div>
 
         {/* Navigation */}
@@ -342,7 +367,7 @@ const CollapsibleSidebar = () => {
           {navigation.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
-            
+
             const handleNavClick = (e: React.MouseEvent) => {
               e.preventDefault();
               if (triggerBlockedNavigation()) {
@@ -352,7 +377,7 @@ const CollapsibleSidebar = () => {
               setIsMobileOpen(false);
               navigate(item.href);
             };
-            
+
             return (
               <a
                 key={item.name}
@@ -365,10 +390,14 @@ const CollapsibleSidebar = () => {
                 `}
                 title={isCollapsed ? item.name : undefined}
               >
-                <div className={`p-2 rounded-lg backdrop-blur-sm ${active ? "bg-primary/30" : "bg-primary/20"}`}>
+                <div
+                  className={`p-2 rounded-lg backdrop-blur-sm ${active ? "bg-primary/30" : "bg-primary/20"}`}
+                >
                   <Icon className="h-6 w-6 text-primary" />
                 </div>
-                {!isCollapsed && <span className="font-medium text-lg">{item.name}</span>}
+                {!isCollapsed && (
+                  <span className="font-medium text-lg">{item.name}</span>
+                )}
               </a>
             );
           })}
@@ -389,12 +418,16 @@ const CollapsibleSidebar = () => {
                         className="rounded-md p-1 hover:bg-primary/10 disabled:opacity-60"
                         aria-label="Actualizar dólar oficial"
                       >
-                        <RefreshCw className={`h-4 w-4 ${isRefreshingDollar ? "animate-spin" : ""}`} />
+                        <RefreshCw
+                          className={`h-4 w-4 ${isRefreshingDollar ? "animate-spin" : ""}`}
+                        />
                       </button>
                     </div>
                     <div className="mt-1 text-center text-xs font-semibold">
                       {dollarRate ? (
-                        <span className="text-foreground">${dollarRate.toFixed(2)}</span>
+                        <span className="text-foreground">
+                          ${dollarRate.toFixed(2)}
+                        </span>
                       ) : (
                         <span className="text-muted-foreground">--</span>
                       )}
@@ -404,7 +437,8 @@ const CollapsibleSidebar = () => {
                 <TooltipContent side="right">
                   <p>
                     Dólar oficial: ${dollarRate?.toFixed(2) ?? "--"}
-                    {displayDollarUpdatedAt && ` (Actualizado: ${displayDollarUpdatedAt})`}
+                    {displayDollarUpdatedAt &&
+                      ` (Actualizado: ${displayDollarUpdatedAt})`}
                   </p>
                 </TooltipContent>
               </Tooltip>
@@ -412,7 +446,9 @@ const CollapsibleSidebar = () => {
           ) : (
             <div className="glassmorphism rounded-xl p-3">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-muted-foreground">Dólar oficial</span>
+                <span className="text-xs text-muted-foreground">
+                  Dólar oficial
+                </span>
                 <button
                   type="button"
                   onClick={handleRefreshDollar}
@@ -420,14 +456,20 @@ const CollapsibleSidebar = () => {
                   className="rounded-md p-1 hover:bg-primary/10 disabled:opacity-60"
                   aria-label="Actualizar dólar oficial"
                 >
-                  <RefreshCw className={`h-4 w-4 ${isRefreshingDollar ? "animate-spin" : ""}`} />
+                  <RefreshCw
+                    className={`h-4 w-4 ${isRefreshingDollar ? "animate-spin" : ""}`}
+                  />
                 </button>
               </div>
               <div className="mt-1 flex items-baseline gap-2">
                 {dollarRate ? (
-                  <span className="text-lg font-semibold text-foreground">${dollarRate.toFixed(2)}</span>
+                  <span className="text-lg font-semibold text-foreground">
+                    ${dollarRate.toFixed(2)}
+                  </span>
                 ) : (
-                  <span className="text-sm text-muted-foreground">No disponible</span>
+                  <span className="text-sm text-muted-foreground">
+                    No disponible
+                  </span>
                 )}
                 {displayDollarUpdatedAt && (
                   <TooltipProvider delayDuration={200}>
@@ -446,7 +488,9 @@ const CollapsibleSidebar = () => {
               </div>
             </div>
           )}
-          <div className={`glassmorphism rounded-xl ${isCollapsed ? "p-2" : "p-4 lg:p-4 p-3"}`}>
+          <div
+            className={`glassmorphism rounded-xl ${isCollapsed ? "p-2" : "p-4 lg:p-4 p-3"}`}
+          >
             {isCollapsed ? (
               <div className="relative">
                 {/* Avatar centrado y clickeable */}
@@ -482,16 +526,25 @@ const CollapsibleSidebar = () => {
               <>
                 <div className="flex items-center gap-2 lg:gap-3 mb-2 lg:mb-3">
                   <Avatar className="h-8 w-8 lg:h-10 lg:w-10">
-                    <AvatarFallback className="bg-primary/20 text-primary text-xs lg:text-sm">{getUserInitials()}</AvatarFallback>
+                    <AvatarFallback className="bg-primary/20 text-primary text-xs lg:text-sm">
+                      {getUserInitials()}
+                    </AvatarFallback>
                   </Avatar>
                   <div className="flex-1 overflow-hidden">
                     <p className="text-xs lg:text-sm font-medium text-foreground truncate">
                       {user?.user_metadata?.full_name || user?.email}
                     </p>
-                    <p className="text-[10px] lg:text-xs text-muted-foreground truncate">{user?.email}</p>
+                    <p className="text-[10px] lg:text-xs text-muted-foreground truncate">
+                      {user?.email}
+                    </p>
                   </div>
                 </div>
-                <Button variant="outline" size="sm" className="w-full text-xs lg:text-sm h-8 lg:h-9" onClick={signOut}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full text-xs lg:text-sm h-8 lg:h-9"
+                  onClick={signOut}
+                >
                   <LogOut className="h-3 w-3 lg:h-4 lg:w-4 mr-1 lg:mr-2" />
                   Cerrar Sesión
                 </Button>

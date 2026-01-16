@@ -165,6 +165,75 @@ const Ayuda = () => {
           </Alert>
         </div>
 
+        {/* Configuración */}
+        <div className="glassmorphism rounded-xl shadow-lg p-6 space-y-4">
+          <h2 className="text-xl font-bold text-foreground flex items-center gap-2">
+            <Settings className="h-6 w-6" />
+            Configuración
+          </h2>
+          <p className="text-muted-foreground text-sm">
+            Ajustes generales y automatizaciones.
+          </p>
+          <div className="space-y-3">
+            <h3 className="text-lg font-semibold">Bajo stock y carrito</h3>
+            <ul className="list-disc list-inside space-y-2 text-sm text-muted-foreground">
+              <li>
+                <strong>Auto agregar bajo stock al carrito:</strong> si activás esta opción, los productos por debajo del
+                umbral se agregan automáticamente al carrito.
+              </li>
+              <li>
+                <strong>Botón &quot;Agregar bajo stock al carrito&quot;:</strong> agrega en un solo paso los productos
+                que estén bajo el mínimo configurado.
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        {/* Operaciones múltiples */}
+        <div className="glassmorphism rounded-xl shadow-lg p-6 space-y-4">
+          <h2 className="text-xl font-bold text-foreground flex items-center gap-2">
+            <FileSpreadsheet className="h-6 w-6" />
+            Operaciones múltiples
+          </h2>
+          <p className="text-muted-foreground text-sm">
+            Podés aplicar acciones masivas sobre filas o columnas seleccionadas.
+          </p>
+
+          <div className="space-y-3">
+            <h3 className="text-lg font-semibold">Acciones disponibles</h3>
+            <ul className="list-disc list-inside space-y-2 text-sm text-muted-foreground">
+              <li>
+                <strong>Agregar a Mi Stock:</strong> incorpora los productos seleccionados a tu stock.
+              </li>
+              <li>
+                <strong>Conversión de dólar por fila/columna:</strong> convierte precios usando el dólar configurado y
+                permite <strong>revertir</strong> la conversión si es necesario.
+              </li>
+              <li>
+                <strong>Quitar de Mi Stock:</strong> elimina los productos seleccionados de tu stock.
+              </li>
+              <li>
+                <strong>Eliminar fila:</strong> borra productos seleccionados.
+              </li>
+              <li>
+                <strong>Eliminar columnas:</strong> elimina columnas seleccionadas de la lista.
+              </li>
+            </ul>
+          </div>
+
+          <div className="space-y-3">
+            <h3 className="text-lg font-semibold">Atajos de selección</h3>
+            <ul className="list-disc list-inside space-y-2 text-sm text-muted-foreground">
+              <li>
+                <strong>Ctrl + clic izquierdo:</strong> selecciona varias filas o columnas de forma individual.
+              </li>
+              <li>
+                <strong>Shift + clic izquierdo:</strong> selecciona un rango continuo entre dos filas o columnas.
+              </li>
+            </ul>
+          </div>
+        </div>
+
         {/* Búsqueda */}
         <div className="glassmorphism rounded-xl shadow-lg p-6 space-y-4">
           <h2 className="text-xl font-bold text-foreground flex items-center gap-2">
