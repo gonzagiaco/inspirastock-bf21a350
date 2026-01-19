@@ -782,7 +782,6 @@ export type Database = {
       bulk_adjust_stock: { Args: { p_adjustments: Json }; Returns: Json }
       bulk_convert_usd_ars: {
         Args: {
-          p_dollar_type?: string
           p_delivery_note_price_key?: string
           p_list_id: string
           p_primary_key?: string
