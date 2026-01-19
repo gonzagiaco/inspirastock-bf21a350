@@ -38,6 +38,7 @@ import {
   deleteProductsEverywhere,
   revertUsdToArsForProducts,
 } from "@/services/bulkTableActions";
+import { onDeliveryNotePricesUpdated } from "@/utils/deliveryNoteEvents";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -253,6 +254,16 @@ export const DynamicProductTable = ({
       longPressTimerRef.current = null;
     }
   };
+
+  // Listen for global price reconversion events (when dollar type changes)
+  useEffect(() => {
+    return onDeliveryNotePricesUpdated((detail) => {
+      if (detail.global || detail.listId === listId || detail.listId === "__all__") {
+        queryClient.invalidateQueries({ queryKey: ["list-products", listId], exact: false });
+        queryClient.invalidateQueries({ queryKey: ["global-product-search"] });
+      }
+    });
+  }, [listId, queryClient]);
 
   useEffect(() => {
     if (!menuState) return;

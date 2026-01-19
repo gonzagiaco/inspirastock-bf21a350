@@ -45,6 +45,7 @@ import {
   setStoredDollarType,
   type DollarType,
 } from "@/lib/dollar";
+import { reconvertAllPrices } from "@/services/dollarReconversionService";
 
 const ARG_TIMEZONE = "America/Argentina/Buenos_Aires";
 
@@ -190,14 +191,31 @@ const CollapsibleSidebar = () => {
     [applyDollarSetting],
   );
 
-  const handleDollarTypeChange = (value: string) => {
+  const handleDollarTypeChange = async (value: string) => {
     const nextType = normalizeDollarType(value);
     if (nextType === dollarType) return;
     setStoredDollarType(nextType);
     setDollarType(nextType);
     setDollarRate(null);
     setDollarUpdatedAt(null);
-    void refreshDollarForType(nextType);
+    
+    // First refresh the dollar rate for the new type
+    await refreshDollarForType(nextType);
+    
+    // Then reconvert any existing converted prices with the new rate
+    if (isOnline()) {
+      try {
+        const result = await reconvertAllPrices(nextType);
+        if (result.updated > 0) {
+          toast.success(
+            `Precios actualizados con ${getDollarLabel(nextType)}: $${result.dollarRate.toLocaleString("es-AR")}`,
+            { description: `${result.updated} productos reconvertidos` }
+          );
+        }
+      } catch (error) {
+        console.error("Error reconverting prices:", error);
+      }
+    }
   };
 
   useEffect(() => {
