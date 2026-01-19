@@ -803,6 +803,10 @@ export type Database = {
             Returns: Json
           }
       bulk_delete_products: { Args: { p_product_ids: string[] }; Returns: Json }
+      bulk_reconvert_usd_ars: {
+        Args: { p_dollar_type?: string }
+        Returns: Json
+      }
       bulk_remove_from_my_stock: {
         Args: { p_product_ids: string[] }
         Returns: Json

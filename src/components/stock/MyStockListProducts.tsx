@@ -21,6 +21,7 @@ import { CardPreviewSettings } from "@/components/CardPreviewSettings";
 import { useProductListStore } from "@/stores/productListStore";
 import { useDebounce } from "@/hooks/useDebounce";
 import { bulkRemoveFromMyStock, convertUsdToArsForProducts, deleteColumnsFromList, revertUsdToArsForProducts } from "@/services/bulkTableActions";
+import { onDeliveryNotePricesUpdated } from "@/utils/deliveryNoteEvents";
 import { useRequestCartStore } from "@/stores/requestCartStore";
 import {
   AlertDialog,
@@ -152,6 +153,16 @@ export const MyStockListProducts = memo(function MyStockListProducts({
       setSelectedColumnKeys(new Set());
     }
   }, [effectiveViewMode, selectedColumnKeys.size]);
+
+  // Listen for global price reconversion events (when dollar type changes)
+  useEffect(() => {
+    return onDeliveryNotePricesUpdated((detail) => {
+      if (detail.global || detail.listId === listId || detail.listId === "__all__") {
+        queryClient.invalidateQueries({ queryKey: ["my-stock"] });
+        queryClient.invalidateQueries({ queryKey: ["list-products", listId], exact: false });
+      }
+    });
+  }, [listId, queryClient]);
 
   // Handler para quitar de Mi Stock - persist to IndexedDB BEFORE UI update
   const handleRemoveFromStock = async (product: any) => {
