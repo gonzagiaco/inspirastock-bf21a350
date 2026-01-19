@@ -23,24 +23,39 @@ Deno.serve(async (req) => {
 
   try {
     let typeParam: string | null = null
-    if (req.method !== 'GET') {
+    
+    // Try to get type from request body first (for POST requests)
+    if (req.method === 'POST') {
       try {
-        const body = await req.json()
-        typeParam = typeof body?.type === "string" ? body.type : null
-      } catch {
-        typeParam = null
+        const bodyText = await req.text()
+        console.log('📥 Request body raw:', bodyText)
+        
+        if (bodyText) {
+          const body = JSON.parse(bodyText)
+          console.log('📥 Request body parsed:', JSON.stringify(body))
+          typeParam = typeof body?.type === "string" ? body.type : null
+          console.log('📥 Type from body:', typeParam)
+        }
+      } catch (parseError) {
+        console.log('⚠️ Could not parse body:', parseError)
       }
     }
+    
+    // Fallback to query params
     if (!typeParam) {
       const url = new URL(req.url)
       typeParam = url.searchParams.get("type")
+      console.log('📥 Type from query params:', typeParam)
     }
 
     const dollarType = normalizeDollarType(typeParam)
-    const dollarLabel = dollarType === "blue" ? "Dolar blue" : "Dolar oficial"
+    const dollarLabel = dollarType === "blue" ? "Dólar blue" : "Dólar oficial"
     const apiUrl = DOLAR_API_URLS[dollarType]
     const settingKey = dollarType === "blue" ? "dollar_blue" : "dollar_official"
-    console.log(`Actualizando ${dollarLabel}...`)
+    
+    console.log(`🔄 Iniciando actualización: ${dollarLabel}`)
+    console.log(`🔗 API URL: ${apiUrl}`)
+    console.log(`🔑 Setting key: ${settingKey}`)
 
     // 1. Obtener cotización de API externa
     const response = await fetch(apiUrl)
@@ -49,11 +64,11 @@ Deno.serve(async (req) => {
     }
     
     const data = await response.json()
-    console.log('📊 Cotización obtenida:', data)
+    console.log('📊 Cotización obtenida:', JSON.stringify(data))
     
     // 2. Extraer datos relevantes
     const dollarData = {
-      rate: data.venta, // Valor principal para conversión
+      rate: data.venta,
       venta: data.venta,
       compra: data.compra,
       source: 'dolarapi.com',
@@ -80,7 +95,7 @@ Deno.serve(async (req) => {
       throw error
     }
 
-    console.log(`Valor de ${dollarLabel} actualizado correctamente`)
+    console.log(`✅ ${dollarLabel} actualizado correctamente`)
     console.log(`💵 Nuevo valor: $${dollarData.rate}`)
 
     return new Response(
