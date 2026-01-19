@@ -781,7 +781,7 @@ export const DynamicProductTable = ({
       });
 
       if (!result.dollarRate) {
-        toast.error("No hay dólar oficial configurado para convertir");
+        toast.error(`No hay ${result.dollarLabel.toLowerCase()} configurado para convertir`);
         return;
       }
 
@@ -790,7 +790,7 @@ export const DynamicProductTable = ({
       await syncListCacheFromLocal(productsToProcess.map((p) => p.id));
 
       toast.success(result.updated === 1 ? "Precio convertido a ARS" : `${result.updated} productos convertidos a ARS`, {
-        description: `Dólar oficial: $${result.dollarRate.toFixed(2)}`,
+        description: `${result.dollarLabel}: $${result.dollarRate.toFixed(2)}`,
       });
 
       queryClient.invalidateQueries({ queryKey: ["list-products", listId], exact: false });
@@ -870,7 +870,7 @@ export const DynamicProductTable = ({
       });
 
       if (!result.dollarRate) {
-        toast.error("No hay dólar oficial configurado para convertir");
+        toast.error(`No hay ${result.dollarLabel.toLowerCase()} configurado para convertir`);
         return;
       }
 
@@ -885,7 +885,7 @@ export const DynamicProductTable = ({
           ? {
               description: `${skipped} producto${skipped === 1 ? "" : "s"} ya convertido${skipped === 1 ? "" : "s"}`,
             }
-          : { description: `Dólar oficial: $${result.dollarRate.toFixed(2)}` },
+          : { description: `${result.dollarLabel}: $${result.dollarRate.toFixed(2)}` },
       );
 
       queryClient.invalidateQueries({ queryKey: ["list-products", listId], exact: false });

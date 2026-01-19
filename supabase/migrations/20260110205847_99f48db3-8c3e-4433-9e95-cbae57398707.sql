@@ -5,7 +5,8 @@ CREATE OR REPLACE FUNCTION public.bulk_convert_usd_ars(
   p_product_ids uuid[] DEFAULT NULL,
   p_target_keys text[] DEFAULT NULL,
   p_primary_key text DEFAULT NULL,
-  p_delivery_note_price_key text DEFAULT NULL
+  p_delivery_note_price_key text DEFAULT NULL,
+  p_dollar_type text DEFAULT NULL
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -15,6 +16,8 @@ DECLARE
   v_user_id uuid;
   v_now timestamptz := now();
   v_dollar_rate numeric;
+  v_dollar_type text;
+  v_dollar_key text;
   v_target_keys text[];
   v_primary_key text;
   v_use_all boolean;
@@ -38,10 +41,13 @@ BEGIN
     RAISE EXCEPTION 'Usuario no autenticado';
   END IF;
 
+  v_dollar_type := CASE WHEN p_dollar_type = 'blue' THEN 'blue' ELSE 'official' END;
+  v_dollar_key := CASE WHEN v_dollar_type = 'blue' THEN 'dollar_blue' ELSE 'dollar_official' END;
+
   SELECT (value->>'rate')::numeric
   INTO v_dollar_rate
   FROM public.settings
-  WHERE key = 'dollar_official';
+  WHERE key = v_dollar_key;
 
   IF v_dollar_rate IS NULL OR v_dollar_rate <= 0 THEN
     RETURN jsonb_build_object(
@@ -50,6 +56,7 @@ BEGIN
       'updated', 0,
       'skipped', 0,
       'dollar_rate', 0,
+      'dollar_type', v_dollar_type,
       'target_keys', COALESCE(p_target_keys, ARRAY[]::text[])
     );
   END IF;
@@ -62,6 +69,7 @@ BEGIN
       'updated', 0,
       'skipped', 0,
       'dollar_rate', v_dollar_rate,
+      'dollar_type', v_dollar_type,
       'target_keys', v_target_keys
     );
   END IF;
@@ -184,6 +192,7 @@ BEGIN
     'updated', v_updated,
     'skipped', v_skipped,
     'dollar_rate', v_dollar_rate,
+    'dollar_type', v_dollar_type,
     'target_keys', v_target_keys
   );
 EXCEPTION

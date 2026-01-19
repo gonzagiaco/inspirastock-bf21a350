@@ -10,6 +10,8 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { MappingConfig } from "@/components/suppliers/ListConfigurationView";
 import { localDB } from "@/lib/localDB";
 import { supabase } from "@/integrations/supabase/client";
+import { onDeliveryNotePricesUpdated } from "@/utils/deliveryNoteEvents";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface ProductSearchProps {
   onSelect: (product: { id?: string; listId?: string; code: string; name: string; price: number; priceColumnKeyUsed?: string | null }) => void;
@@ -20,6 +22,7 @@ const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
   const [isFocused, setIsFocused] = useState(false);
   const [displayPricesByProductId, setDisplayPricesByProductId] = useState<Record<string, number>>({});
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const queryClient = useQueryClient();
 
   const { productLists } = useProductLists();
   const isOnline = useOnlineStatus();
@@ -60,6 +63,43 @@ const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
   useEffect(() => {
     setDisplayPricesByProductId({});
   }, [productLists]);
+
+  useEffect(() => {
+    return onDeliveryNotePricesUpdated((detail) => {
+      if (!detail.listId && (!detail.productIds || detail.productIds.length === 0)) return;
+
+      setDisplayPricesByProductId((prev) => {
+        let changed = false;
+        const next = { ...prev };
+
+        if (detail.productIds && detail.productIds.length > 0) {
+          detail.productIds.forEach((id) => {
+            const key = String(id);
+            if (key in next) {
+              delete next[key];
+              changed = true;
+            }
+          });
+        }
+
+        if (detail.listId && results.length > 0) {
+          const listId = String(detail.listId);
+          results.forEach((product: any) => {
+            if (String(product.list_id) !== listId) return;
+            const key = String(product.product_id);
+            if (key in next) {
+              delete next[key];
+              changed = true;
+            }
+          });
+        }
+
+        return changed ? next : prev;
+      });
+
+      queryClient.invalidateQueries({ queryKey: ["global-product-search"], exact: false });
+    });
+  }, [queryClient, results]);
 
   const getRemitoDisplayPrice = (product: any): number => {
     const fallback = parsePriceValue(product?.price) ?? 0;

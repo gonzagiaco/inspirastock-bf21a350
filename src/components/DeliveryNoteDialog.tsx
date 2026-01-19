@@ -266,7 +266,7 @@ const DeliveryNoteDialog = ({ open, onOpenChange, note, isLoadingNote = false, i
         const productRow = productMap.get(String(item.productId));
         if (!indexRow && !productRow) return item;
 
-        if (listIdFilter) {
+        if (listIdFilter && !productIdSet) {
           const itemListId = item.productListId != null ? String(item.productListId) : "";
           const indexListId = indexRow?.list_id != null ? String(indexRow.list_id) : "";
           const productListId = productRow?.list_id != null ? String(productRow.list_id) : "";

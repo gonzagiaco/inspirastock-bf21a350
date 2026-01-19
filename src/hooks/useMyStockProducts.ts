@@ -205,7 +205,7 @@ export function useMyStockProducts(options: UseMyStockProductsOptions = {}) {
               calculated_data: indexRecord?.calculated_data || {},
               code: entry.code ?? indexRecord?.code ?? "",
               name: entry.name ?? indexRecord?.name ?? "",
-              price: entry.price ?? indexRecord?.price ?? null,
+              price: indexRecord?.price ?? entry.price ?? null,
               quantity: entry.quantity ?? 0,
               stock_threshold: entry.stock_threshold ?? 0,
             };
@@ -254,7 +254,7 @@ export function useMyStockProducts(options: UseMyStockProductsOptions = {}) {
             calculated_data: indexRecord?.calculated_data || {},
             code: entry.code ?? indexRecord?.code ?? "",
             name: entry.name ?? indexRecord?.name ?? "",
-            price: entry.price ?? indexRecord?.price ?? null,
+            price: indexRecord?.price ?? entry.price ?? null,
             quantity: entry.quantity ?? 0,
             stock_threshold: entry.stock_threshold ?? 0,
           };

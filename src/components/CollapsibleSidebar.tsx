@@ -8,6 +8,7 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Receipt,
   CircleHelp,
   Package,
@@ -28,6 +29,22 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useNavigationBlock } from "@/hooks/useNavigationBlock";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  getDollarLabel,
+  getDollarSettingKey,
+  getStoredDollarType,
+  normalizeDollarType,
+  resolveDollarRate,
+  setStoredDollarType,
+  type DollarType,
+} from "@/lib/dollar";
 
 const ARG_TIMEZONE = "America/Argentina/Buenos_Aires";
 
@@ -75,6 +92,7 @@ const CollapsibleSidebar = () => {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showLogout, setShowLogout] = useState(false);
+  const [dollarType, setDollarType] = useState<DollarType>(() => getStoredDollarType());
   const [dollarRate, setDollarRate] = useState<number | null>(null);
   const [dollarUpdatedAt, setDollarUpdatedAt] = useState<string | null>(null);
   const [isRefreshingDollar, setIsRefreshingDollar] = useState(false);
@@ -105,14 +123,82 @@ const CollapsibleSidebar = () => {
 
   const applyDollarSetting = useCallback(
     (value: any, updatedAt?: string | null) => {
-      const rate = Number(value?.rate ?? value?.venta ?? 0);
-      setDollarRate(Number.isFinite(rate) && rate > 0 ? rate : null);
+      const rate = resolveDollarRate(value);
+      setDollarRate(rate > 0 ? rate : null);
       const resolvedUpdatedAt =
         updatedAt ?? value?.updatedAt ?? value?.fechaActualizacion ?? null;
       setDollarUpdatedAt(resolvedUpdatedAt);
     },
     [],
   );
+
+  const refreshDollarForType = useCallback(
+    async (type: DollarType, options?: { showToast?: boolean }) => {
+      if (refreshInFlightRef.current) return;
+      refreshInFlightRef.current = true;
+
+      const dollarLabel = getDollarLabel(type);
+      if (!isOnline()) {
+        refreshInFlightRef.current = false;
+        if (options?.showToast) {
+          toast.error(`Sin conexiИn. No se puede actualizar el ${dollarLabel.toLowerCase()}.`);
+        }
+        return;
+      }
+
+      if (options?.showToast) {
+        setIsRefreshingDollar(true);
+      }
+      try {
+        const { data, error } = await supabase.functions.invoke("update-dollar-rate", {
+          body: { type },
+        });
+        if (error) throw error;
+        if (!data?.success || !data?.data) {
+          throw new Error(`No se pudo actualizar el ${dollarLabel.toLowerCase()}`);
+        }
+
+        const now = new Date().toISOString();
+        await localDB.settings.put({
+          key: getDollarSettingKey(type),
+          value: data.data,
+          updated_at: now,
+          created_at: now,
+        });
+
+        if (type === getStoredDollarType()) {
+          applyDollarSetting(data.data, now);
+        }
+
+        if (options?.showToast) {
+          const rate = resolveDollarRate(data.data);
+          const rateLabel = rate > 0 ? rate.toFixed(2) : "--";
+          toast.success(`${dollarLabel} actualizado: $${rateLabel}`);
+        }
+      } catch (error: any) {
+        console.error(`Error actualizando ${getDollarLabel(type)}:`, error);
+        if (options?.showToast) {
+          toast.error(error?.message || `Error al actualizar el ${dollarLabel.toLowerCase()}`);
+        }
+      } finally {
+        refreshInFlightRef.current = false;
+        if (options?.showToast) {
+          setIsRefreshingDollar(false);
+        }
+      }
+    },
+    [applyDollarSetting],
+  );
+
+  const handleDollarTypeChange = (value: string) => {
+    const nextType = normalizeDollarType(value);
+    if (nextType === dollarType) return;
+    setStoredDollarType(nextType);
+    setDollarType(nextType);
+    setDollarRate(null);
+    setDollarUpdatedAt(null);
+    void refreshDollarForType(nextType);
+  };
 
   useEffect(() => {
     // Si se expande el sidebar, cerramos el panel de logout flotante
@@ -126,7 +212,8 @@ const CollapsibleSidebar = () => {
 
     const loadDollarSetting = async () => {
       try {
-        const cached = await localDB.settings.get("dollar_official");
+        const settingKey = getDollarSettingKey(dollarType);
+        const cached = await localDB.settings.get(settingKey);
         if (cached?.value && isActive) {
           applyDollarSetting(cached.value, cached.updated_at);
         }
@@ -135,20 +222,25 @@ const CollapsibleSidebar = () => {
         const { data, error } = await supabase
           .from("settings")
           .select("value, updated_at, created_at")
-          .eq("key", "dollar_official")
+          .eq("key", settingKey)
           .maybeSingle();
         if (error) throw error;
-        if (!data?.value || !isActive) return;
+        if (!data?.value || !isActive) {
+          if (isActive) {
+            void refreshDollarForType(dollarType);
+          }
+          return;
+        }
 
         applyDollarSetting(data.value, data.updated_at);
         await localDB.settings.put({
-          key: "dollar_official",
+          key: settingKey,
           value: data.value,
           updated_at: data.updated_at ?? new Date().toISOString(),
           created_at: data.created_at ?? new Date().toISOString(),
         });
       } catch (error) {
-        console.error("Error cargando dolar oficial:", error);
+        console.error(`Error cargando ${getDollarLabel(dollarType)}:`, error);
       }
     };
 
@@ -156,74 +248,15 @@ const CollapsibleSidebar = () => {
     return () => {
       isActive = false;
     };
-  }, [applyDollarSetting]);
+  }, [applyDollarSetting, dollarType, refreshDollarForType]);
 
   const handleRefreshDollar = async () => {
-    if (refreshInFlightRef.current) return;
-    refreshInFlightRef.current = true;
-    if (!isOnline()) {
-      refreshInFlightRef.current = false;
-      toast.error("Sin conexión. No se puede actualizar el dólar.");
-      return;
-    }
-
-    setIsRefreshingDollar(true);
-    try {
-      const { data, error } =
-        await supabase.functions.invoke("update-dollar-rate");
-      if (error) throw error;
-      if (!data?.success || !data?.data) {
-        throw new Error("No se pudo actualizar el dólar oficial");
-      }
-
-      const now = new Date().toISOString();
-      applyDollarSetting(data.data, now);
-      await localDB.settings.put({
-        key: "dollar_official",
-        value: data.data,
-        updated_at: now,
-        created_at: now,
-      });
-      const rate = Number(data.data.rate ?? data.data.venta ?? 0);
-      const rateLabel =
-        Number.isFinite(rate) && rate > 0 ? rate.toFixed(2) : "--";
-      toast.success(`Dólar actualizado: $${rateLabel}`);
-    } catch (error: any) {
-      console.error("Error actualizando dólar oficial:", error);
-      toast.error(error?.message || "Error al actualizar el dólar");
-    } finally {
-      refreshInFlightRef.current = false;
-      setIsRefreshingDollar(false);
-    }
+    await refreshDollarForType(dollarType, { showToast: true });
   };
 
   const refreshDollarSilent = useCallback(async () => {
-    if (refreshInFlightRef.current) return;
-    if (!isOnline()) return;
-
-    refreshInFlightRef.current = true;
-    try {
-      const { data, error } =
-        await supabase.functions.invoke("update-dollar-rate");
-      if (error) throw error;
-      if (!data?.success || !data?.data) {
-        throw new Error("No se pudo actualizar el dólar oficial");
-      }
-
-      const now = new Date().toISOString();
-      applyDollarSetting(data.data, now);
-      await localDB.settings.put({
-        key: "dollar_official",
-        value: data.data,
-        updated_at: now,
-        created_at: now,
-      });
-    } catch (error) {
-      console.error("Error actualizando dólar oficial:", error);
-    } finally {
-      refreshInFlightRef.current = false;
-    }
-  }, [applyDollarSetting]);
+    await refreshDollarForType(dollarType);
+  }, [dollarType, refreshDollarForType]);
 
   useEffect(() => {
     let timerId: number | null = null;
@@ -255,6 +288,7 @@ const CollapsibleSidebar = () => {
   const formattedDollarUpdatedAt = formatArgentinaDateTime(dollarUpdatedAt);
   const displayDollarUpdatedAt =
     formattedDollarUpdatedAt ?? dollarUpdatedAt ?? null;
+  const dollarLabel = getDollarLabel(dollarType);
 
   return (
     <>
@@ -416,7 +450,7 @@ const CollapsibleSidebar = () => {
                         onClick={handleRefreshDollar}
                         disabled={isRefreshingDollar}
                         className="rounded-md p-1 hover:bg-primary/10 disabled:opacity-60"
-                        aria-label="Actualizar dólar oficial"
+                        aria-label={`Actualizar ${dollarLabel}`}
                       >
                         <RefreshCw
                           className={`h-4 w-4 ${isRefreshingDollar ? "animate-spin" : ""}`}
@@ -436,7 +470,7 @@ const CollapsibleSidebar = () => {
                 </TooltipTrigger>
                 <TooltipContent side="right">
                   <p>
-                    Dólar oficial: ${dollarRate?.toFixed(2) ?? "--"}
+                    {dollarLabel}: ${dollarRate?.toFixed(2) ?? "--"}
                     {displayDollarUpdatedAt &&
                       ` (Actualizado: ${displayDollarUpdatedAt})`}
                   </p>
@@ -446,15 +480,37 @@ const CollapsibleSidebar = () => {
           ) : (
             <div className="glassmorphism rounded-xl p-3">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-muted-foreground">
-                  Dólar oficial
-                </span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                      aria-label="Seleccionar tipo de dolar"
+                    >
+                      <span>{dollarLabel}</span>
+                      <ChevronUp className="h-3 w-3" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent side="top" align="start">
+                    <DropdownMenuRadioGroup
+                      value={dollarType}
+                      onValueChange={handleDollarTypeChange}
+                    >
+                      <DropdownMenuRadioItem value="official">
+                        Dolar oficial
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="blue">
+                        Dolar blue
+                      </DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <button
                   type="button"
                   onClick={handleRefreshDollar}
                   disabled={isRefreshingDollar}
                   className="rounded-md p-1 hover:bg-primary/10 disabled:opacity-60"
-                  aria-label="Actualizar dólar oficial"
+                  aria-label={`Actualizar ${dollarLabel}`}
                 >
                   <RefreshCw
                     className={`h-4 w-4 ${isRefreshingDollar ? "animate-spin" : ""}`}

@@ -2,12 +2,19 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   bulkAddToMyStockOffline,
   bulkRemoveFromMyStockOffline,
-  getOfficialDollarRate,
   isOnline,
   localDB,
   queueOperation,
   queueOperationsBulk,
 } from "@/lib/localDB";
+import {
+  getDollarLabel,
+  getDollarSettingKey,
+  getStoredDollarType,
+  normalizeDollarType,
+  resolveDollarRate,
+  type DollarType,
+} from "@/lib/dollar";
 import { normalizeRawPrice } from "@/utils/numberParser";
 import { applyPercentageAdjustment, resolveDeliveryNoteUnitPrice } from "@/utils/deliveryNotePricing";
 import { notifyDeliveryNotePricesUpdated } from "@/utils/deliveryNoteEvents";
@@ -18,6 +25,9 @@ function uniqStrings(values: Array<string | null | undefined>): string[] {
 }
 
 const DEFAULT_PRICE_KEY = "price";
+
+const resolveDeliveryNotePriceColumn = (mappingConfig?: any) =>
+  mappingConfig?.delivery_note_price_column ?? mappingConfig?.price_primary_key ?? DEFAULT_PRICE_KEY;
 
 const chunkArray = (values: string[], size = 500) => {
   const chunks: string[][] = [];
@@ -260,16 +270,27 @@ export async function deleteColumnsFromList(args: {
   return { updatedSchema, updatedMappingConfig };
 }
 
-async function getDollarRateWithFallback(): Promise<number> {
-  let rate = await getOfficialDollarRate();
-  if (rate && rate > 0) return rate;
-  if (!isOnline()) return 0;
+async function getDollarRateWithFallback(
+  dollarType: DollarType,
+): Promise<{ rate: number; type: DollarType; label: string }> {
+  const label = getDollarLabel(dollarType);
+  const settingKey = getDollarSettingKey(dollarType);
+  let rate = 0;
 
-  const { data, error } = await supabase.from("settings").select("value").eq("key", "dollar_official").maybeSingle();
+  try {
+    const setting = await localDB.settings.get(settingKey);
+    rate = resolveDollarRate(setting?.value);
+  } catch (error) {
+    console.error("Error leyendo dolar local:", error);
+  }
+
+  if (rate > 0) return { rate, type: dollarType, label };
+  if (!isOnline()) return { rate: 0, type: dollarType, label };
+
+  const { data, error } = await supabase.from("settings").select("value").eq("key", settingKey).maybeSingle();
   if (error) throw error;
-  const value = data?.value as any;
-  rate = Number(value?.rate ?? 0);
-  return Number.isFinite(rate) ? rate : 0;
+  rate = resolveDollarRate(data?.value);
+  return { rate, type: dollarType, label };
 }
 
 export async function bulkAddToMyStock(args: { productIds: string[]; quantity?: number; stockThreshold?: number }) {
@@ -334,9 +355,18 @@ export async function convertUsdToArsForProducts(args: {
   targetKeys?: string[];
   productIds?: string[];
   applyToAll?: boolean;
-}): Promise<{ processed: number; updated: number; skippedAlreadyConverted: number; dollarRate: number; targetKeys: string[] }> {
+}): Promise<{
+  processed: number;
+  updated: number;
+  skippedAlreadyConverted: number;
+  dollarRate: number;
+  dollarType: DollarType;
+  dollarLabel: string;
+  targetKeys: string[];
+}> {
   const { products, mappingConfig, columnSchema } = args;
   const now = new Date().toISOString();
+  const selectedDollarType = getStoredDollarType();
   const notifyProductIds = uniqStrings(
     args.productIds && args.productIds.length > 0 ? args.productIds : products.map((p) => p.id),
   );
@@ -358,8 +388,10 @@ export async function convertUsdToArsForProducts(args: {
                 .map((c) => c.key)
                 .filter((k) => k.toLowerCase().includes("precio") || k.toLowerCase().includes("price"))
             : []),
-        ],
+      ],
   );
+  const deliveryNotePriceKey = resolveDeliveryNotePriceColumn(mappingConfig);
+  const shouldRefreshDeliveryNotePrices = targetKeys.includes(deliveryNotePriceKey);
 
   if (isOnline()) {
     const primaryKey = mappingConfig?.price_primary_key ?? "price";
@@ -373,12 +405,13 @@ export async function convertUsdToArsForProducts(args: {
       p_target_keys: targetKeys,
       p_primary_key: primaryKey,
       p_delivery_note_price_key: deliveryNotePriceKey ?? undefined,
+      p_dollar_type: selectedDollarType,
     });
     if (error) throw error;
     const result = data as any;
     if (result?.success === false) throw new Error(result?.error || "bulk_convert_usd_ars failed");
 
-    if (Number(result?.updated ?? 0) > 0) {
+    if (Number(result?.updated ?? 0) > 0 && shouldRefreshDeliveryNotePrices) {
       try {
         await updateDeliveryNoteItemsOnline({
           listId: args.listId,
@@ -395,18 +428,30 @@ export async function convertUsdToArsForProducts(args: {
       });
     }
 
+    const responseDollarType = normalizeDollarType(result?.dollar_type ?? selectedDollarType);
     return {
       processed: Number(result?.processed ?? 0),
       updated: Number(result?.updated ?? 0),
       skippedAlreadyConverted: Number(result?.skipped ?? 0),
       dollarRate: Number(result?.dollar_rate ?? 0),
+      dollarType: responseDollarType,
+      dollarLabel: getDollarLabel(responseDollarType),
       targetKeys: (result?.target_keys as string[]) ?? targetKeys,
     };
   }
 
-  const dollarRate = await getDollarRateWithFallback();
+  const { rate: dollarRate, type: dollarType, label: dollarLabel } =
+    await getDollarRateWithFallback(selectedDollarType);
   if (!dollarRate || dollarRate <= 0) {
-    return { processed: products.length, updated: 0, skippedAlreadyConverted: 0, dollarRate: 0, targetKeys: [] };
+    return {
+      processed: products.length,
+      updated: 0,
+      skippedAlreadyConverted: 0,
+      dollarRate: 0,
+      dollarType,
+      dollarLabel,
+      targetKeys: [],
+    };
   }
 
   const {
@@ -593,54 +638,56 @@ export async function convertUsdToArsForProducts(args: {
       }
     }
 
-    const noteItems = await localDB.delivery_note_items.where("product_id").equals(productId).toArray();
-    if (noteItems.length) {
-      const localProductRow = await localDB.dynamic_products.get(productId);
-      const indexForPricing = {
-        ...(indexRecord || {}),
-        calculated_data: mergedCalculated,
-        ...(nextPrimaryPrice != null ? { price: nextPrimaryPrice } : {}),
-      };
+    if (shouldRefreshDeliveryNotePrices) {
+      const noteItems = await localDB.delivery_note_items.where("product_id").equals(productId).toArray();
+      if (noteItems.length) {
+        const localProductRow = await localDB.dynamic_products.get(productId);
+        const indexForPricing = {
+          ...(indexRecord || {}),
+          calculated_data: mergedCalculated,
+          ...(nextPrimaryPrice != null ? { price: nextPrimaryPrice } : {}),
+        };
 
-      const updatedItems = await buildUpdatedDeliveryNoteItems({
-        items: noteItems,
-        mappingConfig,
-        indexMap: new Map([[productId, indexForPricing]]),
-        productMap: localProductRow ? new Map([[productId, localProductRow]]) : new Map(),
-      });
+        const updatedItems = await buildUpdatedDeliveryNoteItems({
+          items: noteItems,
+          mappingConfig,
+          indexMap: new Map([[productId, indexForPricing]]),
+          productMap: localProductRow ? new Map([[productId, localProductRow]]) : new Map(),
+        });
 
-      if (updatedItems.length) {
-        await localDB.delivery_note_items.bulkPut(updatedItems);
+        if (updatedItems.length) {
+          await localDB.delivery_note_items.bulkPut(updatedItems);
 
-        if (isOnline()) {
-          await Promise.all(
-            updatedItems.map(async (item: any) => {
-              const { error } = await supabase
-                .from("delivery_note_items")
-                .update({
+          if (isOnline()) {
+            await Promise.all(
+              updatedItems.map(async (item: any) => {
+                const { error } = await supabase
+                  .from("delivery_note_items")
+                  .update({
+                    unit_price: item.unit_price,
+                    unit_price_base: item.unit_price_base,
+                    adjustment_pct: item.adjustment_pct,
+                    subtotal: item.subtotal,
+                  })
+                  .eq("id", item.id);
+                if (error) throw error;
+              }),
+            );
+          } else {
+            updatedItems.forEach((item: any) => {
+              queueOps.push({
+                tableName: "delivery_note_items",
+                operationType: "UPDATE",
+                recordId: item.id,
+                data: {
                   unit_price: item.unit_price,
                   unit_price_base: item.unit_price_base,
                   adjustment_pct: item.adjustment_pct,
                   subtotal: item.subtotal,
-                })
-                .eq("id", item.id);
-              if (error) throw error;
-            }),
-          );
-        } else {
-          updatedItems.forEach((item: any) => {
-            queueOps.push({
-              tableName: "delivery_note_items",
-              operationType: "UPDATE",
-              recordId: item.id,
-              data: {
-                unit_price: item.unit_price,
-                unit_price_base: item.unit_price_base,
-                adjustment_pct: item.adjustment_pct,
-                subtotal: item.subtotal,
-              },
+                },
+              });
             });
-          });
+          }
         }
       }
     }
@@ -652,14 +699,22 @@ export async function convertUsdToArsForProducts(args: {
     await queueOperationsBulk(queueOps);
   }
 
-  if (updated > 0) {
+  if (updated > 0 && shouldRefreshDeliveryNotePrices) {
     notifyDeliveryNoteRefresh({
       listId: args.listId,
       productIds: notifyProductIds.length ? notifyProductIds : undefined,
     });
   }
 
-  return { processed: products.length, updated, skippedAlreadyConverted, dollarRate, targetKeys };
+  return {
+    processed: products.length,
+    updated,
+    skippedAlreadyConverted,
+    dollarRate,
+    dollarType,
+    dollarLabel,
+    targetKeys,
+  };
 }
 
 export async function revertUsdToArsForProducts(args: {
@@ -675,6 +730,9 @@ export async function revertUsdToArsForProducts(args: {
   const notifyProductIds = uniqStrings(
     args.productIds && args.productIds.length > 0 ? args.productIds : products.map((p) => p.id),
   );
+  const deliveryNotePriceKey = resolveDeliveryNotePriceColumn(mappingConfig);
+  const shouldRefreshDeliveryNotePrices =
+    !args.targetKeys || args.targetKeys.length === 0 ? true : args.targetKeys.includes(deliveryNotePriceKey);
 
   if (isOnline()) {
     const primaryKey = mappingConfig?.price_primary_key ?? "price";
@@ -693,7 +751,7 @@ export async function revertUsdToArsForProducts(args: {
     const result = data as any;
     if (result?.success === false) throw new Error(result?.error || "bulk_revert_usd_ars failed");
 
-    if (Number(result?.reverted ?? 0) > 0) {
+    if (Number(result?.reverted ?? 0) > 0 && shouldRefreshDeliveryNotePrices) {
       try {
         await updateDeliveryNoteItemsOnline({
           listId: args.listId,
@@ -797,54 +855,56 @@ export async function revertUsdToArsForProducts(args: {
       }
     }
 
-    const noteItems = await localDB.delivery_note_items.where("product_id").equals(productId).toArray();
-    if (noteItems.length) {
-      const localProductRow = await localDB.dynamic_products.get(productId);
-      const indexForPricing = {
-        ...(indexRecord || {}),
-        calculated_data: nextCalculated,
-        ...(restoredPrimary != null ? { price: restoredPrimary } : {}),
-      };
+    if (shouldRefreshDeliveryNotePrices) {
+      const noteItems = await localDB.delivery_note_items.where("product_id").equals(productId).toArray();
+      if (noteItems.length) {
+        const localProductRow = await localDB.dynamic_products.get(productId);
+        const indexForPricing = {
+          ...(indexRecord || {}),
+          calculated_data: nextCalculated,
+          ...(restoredPrimary != null ? { price: restoredPrimary } : {}),
+        };
 
-      const updatedItems = await buildUpdatedDeliveryNoteItems({
-        items: noteItems,
-        mappingConfig,
-        indexMap: new Map([[productId, indexForPricing]]),
-        productMap: localProductRow ? new Map([[productId, localProductRow]]) : new Map(),
-      });
+        const updatedItems = await buildUpdatedDeliveryNoteItems({
+          items: noteItems,
+          mappingConfig,
+          indexMap: new Map([[productId, indexForPricing]]),
+          productMap: localProductRow ? new Map([[productId, localProductRow]]) : new Map(),
+        });
 
-      if (updatedItems.length) {
-        await localDB.delivery_note_items.bulkPut(updatedItems);
+        if (updatedItems.length) {
+          await localDB.delivery_note_items.bulkPut(updatedItems);
 
-        if (isOnline()) {
-          await Promise.all(
-            updatedItems.map(async (item: any) => {
-              const { error } = await supabase
-                .from("delivery_note_items")
-                .update({
+          if (isOnline()) {
+            await Promise.all(
+              updatedItems.map(async (item: any) => {
+                const { error } = await supabase
+                  .from("delivery_note_items")
+                  .update({
+                    unit_price: item.unit_price,
+                    unit_price_base: item.unit_price_base,
+                    adjustment_pct: item.adjustment_pct,
+                    subtotal: item.subtotal,
+                  })
+                  .eq("id", item.id);
+                if (error) throw error;
+              }),
+            );
+          } else {
+            updatedItems.forEach((item: any) => {
+              queueOps.push({
+                tableName: "delivery_note_items",
+                operationType: "UPDATE",
+                recordId: item.id,
+                data: {
                   unit_price: item.unit_price,
                   unit_price_base: item.unit_price_base,
                   adjustment_pct: item.adjustment_pct,
                   subtotal: item.subtotal,
-                })
-                .eq("id", item.id);
-              if (error) throw error;
-            }),
-          );
-        } else {
-          updatedItems.forEach((item: any) => {
-            queueOps.push({
-              tableName: "delivery_note_items",
-              operationType: "UPDATE",
-              recordId: item.id,
-              data: {
-                unit_price: item.unit_price,
-                unit_price_base: item.unit_price_base,
-                adjustment_pct: item.adjustment_pct,
-                subtotal: item.subtotal,
-              },
+                },
+              });
             });
-          });
+          }
         }
       }
     }
@@ -914,7 +974,7 @@ export async function revertUsdToArsForProducts(args: {
     await queueOperationsBulk(queueOps);
   }
 
-  if (reverted > 0) {
+  if (reverted > 0 && shouldRefreshDeliveryNotePrices) {
     notifyDeliveryNoteRefresh({
       listId: args.listId,
       productIds: notifyProductIds.length ? notifyProductIds : undefined,

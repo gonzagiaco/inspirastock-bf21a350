@@ -1,6 +1,14 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-const DOLAR_API_URL = "https://dolarapi.com/v1/dolares/oficial"
+const DOLAR_API_URLS = {
+  official: "https://dolarapi.com/v1/dolares/oficial",
+  blue: "https://dolarapi.com/v1/dolares/blue",
+} as const
+
+type DollarType = keyof typeof DOLAR_API_URLS
+
+const normalizeDollarType = (value: string | null): DollarType =>
+  value === "blue" ? "blue" : "official"
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -14,10 +22,28 @@ Deno.serve(async (req) => {
   }
 
   try {
-    console.log('🔄 Iniciando actualización del dólar oficial...')
+    let typeParam: string | null = null
+    if (req.method !== 'GET') {
+      try {
+        const body = await req.json()
+        typeParam = typeof body?.type === "string" ? body.type : null
+      } catch {
+        typeParam = null
+      }
+    }
+    if (!typeParam) {
+      const url = new URL(req.url)
+      typeParam = url.searchParams.get("type")
+    }
+
+    const dollarType = normalizeDollarType(typeParam)
+    const dollarLabel = dollarType === "blue" ? "Dolar blue" : "Dolar oficial"
+    const apiUrl = DOLAR_API_URLS[dollarType]
+    const settingKey = dollarType === "blue" ? "dollar_blue" : "dollar_official"
+    console.log(`Actualizando ${dollarLabel}...`)
 
     // 1. Obtener cotización de API externa
-    const response = await fetch(DOLAR_API_URL)
+    const response = await fetch(apiUrl)
     if (!response.ok) {
       throw new Error(`Error HTTP al llamar DolarApi: ${response.status}`)
     }
@@ -44,7 +70,7 @@ Deno.serve(async (req) => {
     const { error } = await supabaseAdmin
       .from('settings')
       .upsert({
-        key: 'dollar_official',
+        key: settingKey,
         value: dollarData,
         updated_at: new Date().toISOString(),
       })
@@ -54,14 +80,15 @@ Deno.serve(async (req) => {
       throw error
     }
 
-    console.log('✅ Valor de dólar oficial actualizado correctamente')
+    console.log(`Valor de ${dollarLabel} actualizado correctamente`)
     console.log(`💵 Nuevo valor: $${dollarData.rate}`)
 
     return new Response(
       JSON.stringify({ 
         success: true, 
         data: dollarData,
-        message: `Dólar actualizado: $${dollarData.rate}`,
+        type: dollarType,
+        message: `${dollarLabel} actualizado: $${dollarData.rate}`,
       }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -70,7 +97,7 @@ Deno.serve(async (req) => {
     )
 
   } catch (err) {
-    console.error('❌ Error actualizando dólar oficial:', err)
+    console.error('Error actualizando dolar:', err)
     
     const errorMessage = err instanceof Error ? err.message : 'Error desconocido'
     const errorDetails = err instanceof Error ? err.toString() : String(err)

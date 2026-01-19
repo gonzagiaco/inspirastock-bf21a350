@@ -306,7 +306,7 @@ export const ListConfigurationView = forwardRef<ListConfigurationViewHandle, Lis
         }
 
         await queryClient.resetQueries({ queryKey: ["list-products", listId], exact: false });
-        await queryClient.invalidateQueries({ queryKey: ["my-stock"] });
+        await queryClient.resetQueries({ queryKey: ["my-stock"], exact: false });
         await queryClient.invalidateQueries({ queryKey: ["global-product-search"] });
 
         toast.success("Configuración guardada correctamente");
@@ -326,7 +326,7 @@ export const ListConfigurationView = forwardRef<ListConfigurationViewHandle, Lis
         // Invalidate local queries
         await queryClient.invalidateQueries({ queryKey: ["product-lists-index"] });
         await queryClient.invalidateQueries({ queryKey: ["product-lists"] });
-        await queryClient.invalidateQueries({ queryKey: ["my-stock"] });
+        await queryClient.resetQueries({ queryKey: ["my-stock"], exact: false });
 
         toast.success("Configuración guardada (offline - se sincronizará al reconectar)");
       }
