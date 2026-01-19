@@ -780,16 +780,28 @@ export type Database = {
         Returns: Json
       }
       bulk_adjust_stock: { Args: { p_adjustments: Json }; Returns: Json }
-      bulk_convert_usd_ars: {
-        Args: {
-          p_delivery_note_price_key?: string
-          p_list_id: string
-          p_primary_key?: string
-          p_product_ids?: string[]
-          p_target_keys?: string[]
-        }
-        Returns: Json
-      }
+      bulk_convert_usd_ars:
+        | {
+            Args: {
+              p_delivery_note_price_key?: string
+              p_list_id: string
+              p_primary_key?: string
+              p_product_ids?: string[]
+              p_target_keys?: string[]
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_delivery_note_price_key?: string
+              p_dollar_type?: string
+              p_list_id: string
+              p_primary_key?: string
+              p_product_ids?: string[]
+              p_target_keys?: string[]
+            }
+            Returns: Json
+          }
       bulk_delete_products: { Args: { p_product_ids: string[] }; Returns: Json }
       bulk_remove_from_my_stock: {
         Args: { p_product_ids: string[] }
