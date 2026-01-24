@@ -1,17 +1,18 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { Search, Loader2, X } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Search, Loader2, X, Filter } from "lucide-react";
 import { formatARS } from "@/utils/numberParser";
-import { useGlobalProductSearch } from "@/hooks/useGlobalProductSearch";
 import { useProductLists } from "@/hooks/useProductLists";
+import { useSuppliers } from "@/hooks/useSuppliers";
+import { useMyStockProducts } from "@/hooks/useMyStockProducts";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { MappingConfig } from "@/components/suppliers/ListConfigurationView";
 import { localDB } from "@/lib/localDB";
 import { supabase } from "@/integrations/supabase/client";
 import { onDeliveryNotePricesUpdated } from "@/utils/deliveryNoteEvents";
-import { useQueryClient } from "@tanstack/react-query";
 
 interface ProductSearchProps {
   onSelect: (product: { id?: string; listId?: string; code: string; name: string; price: number; priceColumnKeyUsed?: string | null }) => void;
@@ -19,30 +20,82 @@ interface ProductSearchProps {
 
 const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
   const [query, setQuery] = useState("");
+  const [supplierFilter, setSupplierFilter] = useState("all");
   const [isFocused, setIsFocused] = useState(false);
   const [displayPricesByProductId, setDisplayPricesByProductId] = useState<Record<string, number>>({});
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const queryClient = useQueryClient();
 
   const { productLists } = useProductLists();
+  const { suppliers, isLoading: isLoadingSuppliers } = useSuppliers();
+  const { data: myStockProducts, isLoading: isLoadingMyStock } = useMyStockProducts();
   const isOnline = useOnlineStatus();
   const isMobile = useIsMobile();
 
-  const {
-    data: searchData, 
-    isLoading,
-    isOnline: isSearchOnline
-  } = useGlobalProductSearch({
-    searchTerm: query,
-    supplierFilter: "all",
-    minSearchLength: 2,
-    pageSize: 20,
-  });
+  const normalizedQuery = query.trim().toLowerCase();
+  const showResults = isFocused && normalizedQuery.length >= 2;
+
+  const myStockSearchIndex = useMemo(() => {
+    if (!myStockProducts || myStockProducts.length === 0) return [];
+    return myStockProducts.map((product: any) => {
+      const code = product?.code ? String(product.code) : "";
+      const name = product?.name ? String(product.name) : "";
+      return {
+        product,
+        searchText: `${code} ${name}`.trim().toLowerCase(),
+      };
+    });
+  }, [myStockProducts]);
 
   const results = useMemo(() => {
-    if (!searchData?.pages) return [];
-    return searchData.pages.flatMap((page) => page.data || []);
-  }, [searchData]);
+    if (!showResults || myStockSearchIndex.length === 0) return [];
+    const filterSupplier = supplierFilter !== "all" ? supplierFilter : null;
+    const filtered = myStockSearchIndex.filter(({ product, searchText }) => {
+      if (filterSupplier && String(product?.supplier_id ?? "") !== filterSupplier) return false;
+      if (!normalizedQuery) return false;
+      return searchText.includes(normalizedQuery);
+    });
+    return filtered.slice(0, 20).map(({ product }) => product);
+  }, [showResults, myStockSearchIndex, supplierFilter, normalizedQuery]);
+
+  const supplierIdsWithMyStock = useMemo(() => {
+    const ids = new Set<string>();
+    if (!myStockProducts || myStockProducts.length === 0) return ids;
+
+    const listToSupplier = new Map<string, string>();
+    (productLists || []).forEach((list: any) => {
+      if (list?.id && list?.supplier_id) {
+        listToSupplier.set(String(list.id), String(list.supplier_id));
+      }
+    });
+
+    myStockProducts.forEach((entry: any) => {
+      if (entry?.supplier_id) {
+        ids.add(String(entry.supplier_id));
+        return;
+      }
+      const listId = entry?.list_id ? String(entry.list_id) : null;
+      const supplierId = listId ? listToSupplier.get(listId) : null;
+      if (supplierId) ids.add(String(supplierId));
+    });
+
+    return ids;
+  }, [myStockProducts, productLists]);
+
+  const availableSuppliers = useMemo(() => {
+    if (!suppliers || suppliers.length === 0) return [];
+    if (supplierIdsWithMyStock.size === 0) return [];
+    return suppliers.filter((supplier: any) => supplierIdsWithMyStock.has(String(supplier.id)));
+  }, [suppliers, supplierIdsWithMyStock]);
+
+  useEffect(() => {
+    if (supplierFilter === "all") return;
+    if (availableSuppliers.length === 0) {
+      setSupplierFilter("all");
+      return;
+    }
+    const stillValid = availableSuppliers.some((supplier: any) => String(supplier.id) === supplierFilter);
+    if (!stillValid) setSupplierFilter("all");
+  }, [availableSuppliers, supplierFilter]);
 
   const parsePriceValue = (rawValue: unknown): number | null => {
     if (rawValue == null) return null;
@@ -97,9 +150,8 @@ const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
         return changed ? next : prev;
       });
 
-      queryClient.invalidateQueries({ queryKey: ["global-product-search"], exact: false });
     });
-  }, [queryClient, results]);
+  }, [results]);
 
   const getRemitoDisplayPrice = (product: any): number => {
     const fallback = parsePriceValue(product?.price) ?? 0;
@@ -494,111 +546,130 @@ const DeliveryNoteProductSearch = ({ onSelect }: ProductSearchProps) => {
     setIsFocused(false);
   };
 
-  const showResults = isFocused && query.length >= 2;
+  const isLoading = isLoadingMyStock && showResults;
 
   return (
-    <div className="relative" ref={containerRef}>
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por código o nombre..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onFocus={() => {
-              setIsFocused(true);
-              if (isMobile) {
-                requestAnimationFrame(() => {
-                  containerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-                });
-              }
-            }}
-            onBlur={() => {
-              // Delay para permitir click en resultados
-              setTimeout(() => setIsFocused(false), 200);
-            }}
-            className="pl-9 pr-10"
-          />
-          {query.trim().length > 0 && (
-            <button
-              type="button"
-              onClick={() => setQuery("")}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-[#7588eb]"
-              aria-label="Limpiar búsqueda"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-      </div>
+    <div className="flex flex-col gap-2 sm:flex-row">
+      <div className="relative flex-1" ref={containerRef}>
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          placeholder="Buscar por codigo o nombre..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onFocus={() => {
+            setIsFocused(true);
+            if (isMobile) {
+              requestAnimationFrame(() => {
+                containerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+              });
+            }
+          }}
+          onBlur={() => {
+            // Delay para permitir click en resultados
+            setTimeout(() => setIsFocused(false), 200);
+          }}
+          className="pl-9 pr-10"
+        />
+        {query.trim().length > 0 && (
+          <button
+            type="button"
+            onClick={() => setQuery("")}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-[#7588eb]"
+            aria-label="Limpiar busqueda"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
 
-      {isLoading && showResults && (
-        <Card className="absolute z-50 mt-1 w-full p-4 text-center">
-          <Loader2 className="w-4 h-4 animate-spin mx-auto" />
-          <p className="text-sm text-muted-foreground mt-2">
-            Buscando{!isSearchOnline ? " (modo offline)" : ""}...
-          </p>
-        </Card>
-      )}
+        {isLoading && showResults && (
+          <Card className="absolute z-50 mt-1 w-full p-4 text-center">
+            <Loader2 className="w-4 h-4 animate-spin mx-auto" />
+            <p className="text-sm text-muted-foreground mt-2">
+              Buscando{!isOnline ? " (modo offline)" : ""}...
+            </p>
+          </Card>
+        )}
 
-      {!isLoading && showResults && results.length > 0 && (
-        <Card className="absolute z-50 mt-1 w-full max-h-[45vh] sm:max-h-80 overflow-y-auto shadow-lg">
-          <div className="divide-y">
-            {results.map((product: any) => (
-              <div
-                key={product.product_id}
-                className="p-3 hover:bg-accent cursor-pointer transition-colors"
-                onClick={() => handleSelect(product)}
-              >
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <p className="font-medium">{product.name || product.code || "Sin nombre"}</p>
-                    <p className="text-sm text-muted-foreground">
-                      Código: {product.code || "N/A"}
-                    </p>
-                    {product.quantity !== undefined && (
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="text-xs text-muted-foreground">Stock:</span>
-                        <span 
-                          className={`text-xs font-semibold ${
-                            product.quantity === 0 
-                              ? "text-red-500" 
-                              : product.quantity < 10 
-                              ? "text-orange-500" 
-                              : "text-green-600"
-                          }`}
-                        >
-                          {product.quantity} unidades
-                        </span>
-                        {product.quantity === 0 && (
-                          <span className="text-xs bg-red-100 text-red-800 px-2 py-0.5 rounded">
-                            Sin stock
+        {!isLoading && showResults && results.length > 0 && (
+          <Card className="absolute z-50 mt-1 w-full max-h-[45vh] sm:max-h-80 overflow-y-auto shadow-lg">
+            <div className="divide-y">
+              {results.map((product: any) => (
+                <div
+                  key={product.product_id}
+                  className="p-3 hover:bg-accent cursor-pointer transition-colors"
+                  onClick={() => handleSelect(product)}
+                >
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <p className="font-medium">{product.name || product.code || "Sin nombre"}</p>
+                      <p className="text-sm text-muted-foreground">
+                        Codigo: {product.code || "N/A"}
+                      </p>
+                      {product.quantity !== undefined && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-xs text-muted-foreground">Stock:</span>
+                          <span
+                            className={`text-xs font-semibold ${
+                              product.quantity === 0
+                                ? "text-red-500"
+                                : product.quantity < 10
+                                ? "text-orange-500"
+                                : "text-green-600"
+                            }`}
+                          >
+                            {product.quantity} unidades
                           </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <p className="font-semibold">
-                      {formatARS(
-                        displayPricesByProductId[String(product.product_id)] ?? getRemitoDisplayPrice(product)
+                          {product.quantity === 0 && (
+                            <span className="text-xs bg-red-100 text-red-800 px-2 py-0.5 rounded">
+                              Sin stock
+                            </span>
+                          )}
+                        </div>
                       )}
-                    </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-semibold">
+                        {formatARS(
+                          displayPricesByProductId[String(product.product_id)] ?? getRemitoDisplayPrice(product)
+                        )}
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
+              ))}
+            </div>
+          </Card>
+        )}
 
-      {!isLoading && showResults && query.length >= 2 && results.length === 0 && (
+      {!isLoading && showResults && normalizedQuery.length >= 2 && results.length === 0 && (
         <Card className="absolute z-50 mt-1 w-full p-4 text-center">
           <p className="text-muted-foreground">
-            No se encontraron productos{!isSearchOnline ? " (modo offline)" : ""}
+            No se encontraron productos{!isOnline ? " (modo offline)" : ""}
           </p>
         </Card>
       )}
+      </div>
+
+      <div className="w-full sm:w-56">
+        <Select
+          value={supplierFilter}
+          onValueChange={setSupplierFilter}
+          disabled={isLoadingSuppliers || isLoadingMyStock}
+        >
+          <SelectTrigger className="gap-1">
+            <Filter className="h-4 w-4" />
+            <SelectValue placeholder="Proveedor" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos los proveedores</SelectItem>
+            {availableSuppliers.map((supplier: any) => (
+              <SelectItem key={supplier.id} value={supplier.id}>
+                {supplier.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
     </div>
   );
 };

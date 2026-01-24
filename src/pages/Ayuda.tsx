@@ -1,5 +1,6 @@
 import Header from "@/components/Header";
 import {
+  CircleHelp,
   Database,
   FileDown,
   FileSpreadsheet,
@@ -19,7 +20,12 @@ const Ayuda = () => {
 
   return (
     <div className="flex-1 p-4 pt-11 lg:px-4 lg:py-10">
-      <Header title="Ayuda" subtitle="¿Necesitas asistencia?" showSearch={false} />
+      <Header
+        title="Ayuda"
+        subtitle="¿Necesitas asistencia?"
+        showSearch={false}
+        icon={<CircleHelp className="h-8 w-8 text-primary" />}
+      />
 
       <div className="space-y-6">
         {/* Configuración de Proveedores */}

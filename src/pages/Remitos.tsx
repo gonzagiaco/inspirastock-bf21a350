@@ -243,6 +243,11 @@ const Remitos = () => {
     setIsDialogOpen(true);
   };
 
+  const handleEditNote = (noteId: string) => {
+    setEditingNoteId(noteId);
+    setIsDialogOpen(true);
+  };
+
   const handleShowClientHistory = (clientId: string) => {
     setClientFilterId(clientId);
     setActiveTab("remitos");
@@ -396,7 +401,18 @@ const Remitos = () => {
 
                 return (
                   <Card key={note.id}>
-                    <CardContent className="pt-6">
+                    <CardContent
+                      className="pt-6 cursor-pointer"
+                      onClick={() => handleEditNote(note.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          handleEditNote(note.id);
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                    >
                       <div className="flex flex-col lg:flex-row justify-between items-start gap-4">
                         <div className="space-y-2 flex-1 min-w-0">
                           <div className="flex items-center gap-3">
@@ -428,16 +444,17 @@ const Remitos = () => {
                           )}
                         </div>
 
-                        <div className="flex flex-wrap gap-2 justify-end items-start">
+                        <div
+                          className="flex flex-wrap gap-2 justify-end items-start"
+                          onClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button
                                 size="sm"
                                 variant="outline"
-                                onClick={() => {
-                                  setEditingNoteId(note.id);
-                                  setIsDialogOpen(true);
-                                }}
+                                onClick={() => handleEditNote(note.id)}
                               >
                                 <Edit className="h-4 w-4" />
                               </Button>
